@@ -1,89 +1,80 @@
 # Compact Titlebar — Krita Plugin
 
-Krita 插件，将 Windows 原生标题栏替换为紧凑的菜单栏头——菜单栏右侧嵌入最小化/最大化/关闭按钮，菜单栏空白区域可拖动窗口，双击切换最大化。
+> [中文版](README_cn.md)
 
-**仅支持 Windows 10 / 11。** 其他操作系统不受影响（插件在加载时会静默跳过非 Windows 消息）。
+A Krita plugin that replaces the native Windows titlebar with a compact header — window control buttons (minimise / maximise / close) are embedded on the right side of the menu bar, and empty menubar space can be dragged to move the window or double-clicked to toggle maximise.
+
+**Windows 10 / 11 only.** Other operating systems are unaffected (the plugin silently skips non-Windows messages at load time).
+
+## Visual comparison
+
+```
+Native Krita:
+┌─────────────────────────────────────────────┐
+│  untitled.kra  —  Krita         ─  □  ✕  │  ← native titlebar
+├─────────────────────────────────────────────┤
+│  File  Edit  View  ...                      │  ← menu bar
+├─────────────────────────────────────────────┤
+│  canvas                                      │
+└─────────────────────────────────────────────┘
+
+Compact Titlebar:
+┌─────────────────────────────────────────────┐
+│  File  Edit  View  ...          ─  □  ✕  │  ← menu bar == titlebar
+├─────────────────────────────────────────────┤
+│  canvas                                      │
+└─────────────────────────────────────────────┘
+```
+
+- Three window control buttons appear on the right of the menu bar
+- Empty menubar space (where no menu action sits) can be dragged to move the window; Aero Snap (half-screen / quarter-screen) works when dragged to a screen edge
+- Double-click empty menubar space to toggle maximise / restore
 
 ## Installation
 
-refer <https://github.com/naer-lily/krita-shortcut-fix>。
-
----
-
-## 效果
-
-```
-原生 Krita：
-┌─────────────────────────────────────────────┐
-│  未命名.kra  —  Krita           ─  □  ✕  │  ← 原生标题栏
-├─────────────────────────────────────────────┤
-│  File  Edit  View  ...                      │  ← 菜单栏
-├─────────────────────────────────────────────┤
-│  画布内容                                    │
-└─────────────────────────────────────────────┘
-
-Compact Titlebar：
-┌─────────────────────────────────────────────┐
-│  File  Edit  View  ...          ─  □  ✕  │  ← 菜单栏兼标题栏
-├─────────────────────────────────────────────┤
-│  画布内容                                    │
-└─────────────────────────────────────────────┘
-```
-
-- 菜单栏右侧多了三个窗口控制按钮
-- 菜单栏空白区域（没有菜单项的地方）可以拖动来移动窗口，贴边时触发 Aero Snap（半屏/四分之一屏）
-- 双击菜单栏空白区域切换最大化/还原
-
----
-
-## 安装
-
-1. 将 `compact_titlebar/` 文件夹复制到 Krita 的插件目录：
+1. Copy the `compact_titlebar/` folder into Krita's plugin directory:
    ```
    %APPDATA%\krita\pykrita\
    ```
-2. 重启 Krita
-3. 在 **Settings → Configure Krita → Python Plugin Manager** 中勾选 **Compact Titlebar**
+2. Restart Krita
+3. Enable **Compact Titlebar** in **Settings → Configure Krita → Python Plugin Manager**
 
----
+## Technical overview
 
-## 技术实现概述
+### Why not `Qt.FramelessWindowHint`
 
-### 为什么不能用 `Qt.FramelessWindowHint`
+The obvious approach is to call `QMainWindow.setWindowFlags(Qt.FramelessWindowHint)`, but on Windows this changes the underlying HWND to `WS_POPUP` style — which means Windows **stops sending `WM_NCHITTEST` entirely**. Without `WM_NCHITTEST` there is no way to provide resize cursors at window edges or implement edge-drag resizing.
 
-Krita 使用 PyQt5。最"显然"的去标题栏方式是在 QMainWindow 上设置 `Qt.FramelessWindowHint`。
+### The correct approach: manual Win32 style manipulation
 
-但在 Windows 上，这个标志会把底层 HWND 的窗口样式改成 `WS_POPUP`——这意味着 Windows **完全不再发送 `WM_NCHITTEST` 消息**。没有 `WM_NCHITTEST`，就无法在窗口边缘提供缩放光标，也无法实现边缘拖拽缩放。
+Our implementation is equivalent to how VS Code / Chrome / Electron handle custom titlebars at the lowest level:
 
-### 正确做法：手动操作 Win32 窗口样式
+| Step | What | Why |
+|------|------|-----|
+| 1. Win32 style | Remove `WS_CAPTION` (titlebar), keep `WS_THICKFRAME` (borders) | `WS_THICKFRAME` present → Windows still sends `WM_NCHITTEST` → resize + Aero Snap work |
+| 2. DWM frame extension | `DwmExtendFrameIntoClientArea(0, 1, 0, 0)` | Tells the Desktop Window Manager "custom chrome in use" → DWM renders drop shadows |
+| 3. `WM_NCCALCSIZE` | Return 0 → client rect = window rect | `WS_THICKFRAME` borders become invisible (0 px wide); window appears borderless |
+| 4. `WM_NCHITTEST` | Return `HTLEFT` / `HTRIGHT` etc. for the outer 6 px | Windows shows the correct resize cursor and handles edge-dragging natively |
+| 5. `WM_GETMINMAXINFO` | Set max bounds to monitor work area (excluding taskbar) | Maximised window does not cover the taskbar |
 
-我们的方案与 VS Code / Chrome / Electron 等应用的底层实现等价：
+### Drag handling
 
-| 步骤 | 做什么 | 为什么 |
-|------|--------|--------|
-| 1. Win32 样式修改 | 去掉 `WS_CAPTION`（标题栏），保留 `WS_THICKFRAME`（边框） | `WS_THICKFRAME` 存在时 Windows 仍会发送 `WM_NCHITTEST`，边缘缩放和 Aero Snap 才能工作 |
-| 2. DWM 框架扩展 | `DwmExtendFrameIntoClientArea(0, 1, 0, 0)` | 告诉桌面窗口管理器"我们在自定义窗口 chrome"，DWM 自动渲染阴影 |
-| 3. `WM_NCCALCSIZE` | 返回 0 → 客户区 = 整个窗口 | `WS_THICKFRAME` 的边框变为不可见（0px 宽），窗口看起来无边框 |
-| 4. `WM_NCHITTEST` | 窗口边缘 6px 返回 `HTLEFT`/`HTRIGHT` 等 | Windows 显示正确的缩放光标，并处理边缘拖拽 |
-| 5. `WM_GETMINMAXINFO` | 设置最大化边界为显示器工作区（不含任务栏） | 最大化时不会覆盖任务栏 |
+A Qt event filter is installed on the menu bar. Window drag starts on **MouseMove after a 5 px threshold** (not on MousePress — this preserves double-click detection). The drag itself uses Qt's `QWindow.startSystemMove()`, which internally calls `DefWindowProc(WM_SYSCOMMAND, SC_MOVE | HTCAPTION)` — Aero Snap is triggered automatically.
 
-### 拖动
+### Krita-specific caveats
 
-在菜单栏上安装一个 Qt 事件过滤器。鼠标在无菜单项的空白区域按下后**移动超过 5px** 时才启动拖动（不在按下时立即启动，是为了让双击最大化仍然能正常工作）。拖动本身通过 Qt 的 `QWindow.startSystemMove()` 实现，它内部调用 Windows 的 `DefWindowProc(WM_SYSCOMMAND, SC_MOVE | HTCAPTION)`，自动触发 Aero Snap。
+Krita's Python API objects (`Window`, `View`, `Document`, etc.) are **ephemeral thin wrappers** — they can be garbage-collected at any time. Never capture their references in signal callbacks or asynchronous code. Instead, cache stable underlying Qt object identifiers (like `qwin.objectName()`) and look up fresh wrappers at call time via `Krita.instance().windows()`.
 
-### Krita 特定注意事项
-
-Krita 的 Python API 中，`Window`、`View`、`Document` 等对象是**即用即弃的薄封装**——引用它们的 Python 对象随时可能被垃圾回收。因此在信号回调和异步操作中不能捕获这些对象的引用，必须通过底层稳定的 Qt 对象 ID（如 `qwin.objectName()`）反查。
-
-### 文件结构
+### File structure
 
 ```
 compact_titlebar/
-├── compact_titlebar.desktop              # Krita 插件描述文件
+├── compact_titlebar.desktop              # Krita plugin descriptor
 ├── compact_titlebar/
-│   ├── __init__.py                       # Python 包入口
-│   ├── CompactTitlebarExtension.py       # 主逻辑（详见注释）
-│   ├── krita.pyi                         # Krita Python API 类型桩
-│   └── Manual.html                       # Krita 插件帮助页
-└── README.md                              # 本文件
+│   ├── __init__.py                       # Python package entry
+│   ├── CompactTitlebarExtension.py       # main logic (heavily commented)
+│   ├── krita.pyi                         # Krita Python API type stubs
+│   └── Manual.html                       # Krita plugin help page
+├── README.md                              # this file (English)
+└── README_cn.md                           # Chinese version
 ```
