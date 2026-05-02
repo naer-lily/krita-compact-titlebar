@@ -43,6 +43,32 @@ from PyQt5.QtGui import QMouseEvent
 from PyQt5.QtWidgets import QToolButton, QWidget, QHBoxLayout, QMainWindow
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Configuration — all tunable constants live here
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Resize
+RESIZE_BORDER_PX      = 6       # width of invisible resize edge zone
+MONITOR_DEFAULTTONEAREST = 2    # MonitorFromWindow flag
+
+# Drag
+DRAG_THRESHOLD_PX     = 5       # pixels of movement before drag starts
+
+# DWM
+DWM_TOP_MARGIN        = 1       # px extended into client area (triggers shadows)
+
+# Corner widget polling
+CORNER_POLL_MS        = 100     # milliseconds between corner widget checks
+
+# Window control buttons — visual
+BTN_WIDTH             = 60      # px
+BTN_TEXT_MINIMISE     = "\u2500"  # ─
+BTN_TEXT_MAXIMISE     = "\u25A1"  # □
+BTN_TEXT_RESTORE      = "\u2750"  # ❐
+BTN_TEXT_CLOSE        = "\u2715"  # ✕
+CLOSE_HOVER_BG        = "#E81123" # Windows-native red
+
+
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  FRAMELESS WINDOW                                                           ║
 # ║  All Windows-specific code that removes the native titlebar while           ║
@@ -64,7 +90,7 @@ class _MARGINS(ctypes.Structure):
 def _dwm_extend(hwnd: int) -> bool:
     """Request DWM shadows for the window.  Returns False on non-Windows."""
     try:
-        margins = _MARGINS(0, 1, 0, 0)
+        margins = _MARGINS(0, DWM_TOP_MARGIN, 0, 0)
         ctypes.windll.dwmapi.DwmExtendFrameIntoClientArea(
             hwnd, ctypes.byref(margins))
         return True
@@ -148,7 +174,7 @@ class _WinFrameFilter(QAbstractNativeEventFilter):
     WM_NCHITTEST     — returns HT* codes for 6px edge zone (resize cursors).
     """
 
-    BORDER = 6
+    BORDER = RESIZE_BORDER_PX
 
     def __init__(self, qwin: QMainWindow):
         super().__init__()
@@ -165,7 +191,8 @@ class _WinFrameFilter(QAbstractNativeEventFilter):
 
         # -- WM_GETMINMAXINFO: maximised bounds = work area ----------------
         if msg.message == WM_GETMINMAXINFO:
-            monitor = ctypes.windll.user32.MonitorFromWindow(self._hwnd, 2)
+            monitor = ctypes.windll.user32.MonitorFromWindow(
+                self._hwnd, MONITOR_DEFAULTTONEAREST)
             mi = _MONITORINFO()
             mi.cbSize = ctypes.sizeof(_MONITORINFO)
             ctypes.windll.user32.GetMonitorInfoW(monitor, ctypes.byref(mi))
@@ -248,7 +275,7 @@ class _MenubarEventFilter(QObject):
     - Menu clicks:    pass through normally (checked via actionAt()).
     """
 
-    DRAG_THRESHOLD = 5
+    DRAG_THRESHOLD = DRAG_THRESHOLD_PX
 
     def __init__(self, qwin: QMainWindow):
         super().__init__()
@@ -329,21 +356,21 @@ class _WindowStateFilter(QObject):
 # ║  Styling adapts to Krita's active theme via palette inheritance.            ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
-_BTN_STYLESHEET = """
-    QToolButton {
+_BTN_STYLESHEET = f"""
+    QToolButton {{
         background: transparent;
         border: none;
         font-family: "Segoe MDL2 Assets", "Segoe UI Symbol", "Segoe UI", sans-serif;
         padding: 0;
         margin: 0;
-    }
-    QToolButton:hover {
+    }}
+    QToolButton:hover {{
         background: palette(highlight);
-    }
-    QToolButton#titlebar-close:hover {
-        background: #E81123;
+    }}
+    QToolButton#titlebar-close:hover {{
+        background: {CLOSE_HOVER_BG};
         color: white;
-    }
+    }}
 """
 
 
@@ -354,7 +381,7 @@ def _make_window_controls(qwin: QMainWindow, obj_name: str, menubar):
     maximise_button is needed for the window-state filter to update its icon.
     """
     bar_h = menubar.height()
-    btn_w = 60
+    btn_w = BTN_WIDTH
 
     w = QWidget()
     w.setObjectName("compact-titlebar-controls")
@@ -365,7 +392,7 @@ def _make_window_controls(qwin: QMainWindow, obj_name: str, menubar):
 
     # -- Minimise ----------------------------------------------------------
     b_min = QToolButton(w)
-    b_min.setText("\u2500")   # ─
+    b_min.setText(BTN_TEXT_MINIMISE)   # ─
     b_min.setObjectName("titlebar-minimize")
     b_min.setFixedSize(btn_w, bar_h)
     b_min.setToolTip("Minimise")
@@ -394,7 +421,7 @@ def _make_window_controls(qwin: QMainWindow, obj_name: str, menubar):
         qwin.close()
 
     b_close = QToolButton(w)
-    b_close.setText("\u2715")  # ✕
+    b_close.setText(BTN_TEXT_CLOSE)  # ✕
     b_close.setObjectName("titlebar-close")
     b_close.setFixedSize(btn_w, bar_h)
     b_close.setToolTip("Close")
@@ -450,7 +477,7 @@ class CompactTitlebarExtension(Extension):
                 menubar.setCornerWidget(corner, Qt.TopRightCorner)
                 corner.show()
         poll_timer.timeout.connect(_poll_corner)
-        poll_timer.start(100)
+        poll_timer.start(CORNER_POLL_MS)
 
         # ---- Menubar interaction: drag + double-click --------------------
         menubar_filter = _MenubarEventFilter(qwin)
@@ -459,10 +486,10 @@ class CompactTitlebarExtension(Extension):
         # ---- Window state: keep maximise button icon in sync -------------
         def _update_max():
             if qwin.isMaximized():
-                btn_max.setText("\u2750")    # ❐
+                btn_max.setText(BTN_TEXT_RESTORE)    # ❐
                 btn_max.setToolTip("Restore")
             else:
-                btn_max.setText("\u25A1")    # □
+                btn_max.setText(BTN_TEXT_MAXIMISE)    # □
                 btn_max.setToolTip("Maximize")
 
         state_filter = _WindowStateFilter(_update_max)
