@@ -374,12 +374,15 @@ _BTN_STYLESHEET = f"""
 """
 
 
-def _make_window_controls(qwin: QMainWindow, obj_name: str, menubar):
-    """Create the minimise / maximise / close button widget.
+def _make_window_controls(qwin: QMainWindow):
+    """Create the minimise / maximise / close button widget, plus a
+    window-state filter that keeps the maximise icon in sync.
 
-    Returns (corner_widget, maximise_button).
-    maximise_button is needed for the window-state filter to update its icon.
+    All dependencies (menubar, objectName) are derived from qwin.
+    Returns (corner_widget, state_filter) — both need cleanup on teardown.
     """
+    menubar = qwin.menuBar()
+    obj_name = qwin.objectName()
     bar_h = menubar.height()
     btn_w = BTN_WIDTH
 
@@ -392,7 +395,7 @@ def _make_window_controls(qwin: QMainWindow, obj_name: str, menubar):
 
     # -- Minimise ----------------------------------------------------------
     b_min = QToolButton(w)
-    b_min.setText(BTN_TEXT_MINIMISE)   # ─
+    b_min.setText(BTN_TEXT_MINIMISE)
     b_min.setObjectName("titlebar-minimize")
     b_min.setFixedSize(btn_w, bar_h)
     b_min.setToolTip("Minimise")
@@ -421,7 +424,7 @@ def _make_window_controls(qwin: QMainWindow, obj_name: str, menubar):
         qwin.close()
 
     b_close = QToolButton(w)
-    b_close.setText(BTN_TEXT_CLOSE)  # ✕
+    b_close.setText(BTN_TEXT_CLOSE)
     b_close.setObjectName("titlebar-close")
     b_close.setFixedSize(btn_w, bar_h)
     b_close.setToolTip("Close")
@@ -432,7 +435,20 @@ def _make_window_controls(qwin: QMainWindow, obj_name: str, menubar):
     lay.addWidget(b_max)
     lay.addWidget(b_close)
 
-    return w, b_max
+    # -- Window-state filter: keep maximise icon in sync -------------------
+    def _update_max():
+        if qwin.isMaximized():
+            b_max.setText(BTN_TEXT_RESTORE)
+            b_max.setToolTip("Restore")
+        else:
+            b_max.setText(BTN_TEXT_MAXIMISE)
+            b_max.setToolTip("Maximize")
+
+    state_filter = _WindowStateFilter(_update_max)
+    _update_max()
+    qwin.installEventFilter(state_filter)
+
+    return w, state_filter
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -461,8 +477,8 @@ class CompactTitlebarExtension(Extension):
         if obj_name in self._managed:
             self._teardown_window(obj_name)
 
-        # ---- Window controls: buttons in the menu bar corner -------------
-        corner, btn_max = _make_window_controls(qwin, obj_name, menubar)
+        # ---- Window controls: buttons + state filter (all in one) ---------
+        corner, state_filter = _make_window_controls(qwin)
         corner.setPalette(menubar.palette())
         menubar.setCornerWidget(corner, Qt.TopRightCorner)
 
@@ -482,19 +498,6 @@ class CompactTitlebarExtension(Extension):
         # ---- Menubar interaction: drag + double-click --------------------
         menubar_filter = _MenubarEventFilter(qwin)
         menubar.installEventFilter(menubar_filter)
-
-        # ---- Window state: keep maximise button icon in sync -------------
-        def _update_max():
-            if qwin.isMaximized():
-                btn_max.setText(BTN_TEXT_RESTORE)    # ❐
-                btn_max.setToolTip("Restore")
-            else:
-                btn_max.setText(BTN_TEXT_MAXIMISE)    # □
-                btn_max.setToolTip("Maximize")
-
-        state_filter = _WindowStateFilter(_update_max)
-        _update_max()
-        qwin.installEventFilter(state_filter)
 
         # ---- Theme change: sync button palette from menubar --------------
         from PyQt5.QtWidgets import QApplication

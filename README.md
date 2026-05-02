@@ -6,6 +6,10 @@ A Krita plugin that replaces the native Windows titlebar with a compact header �
 
 **Windows 10 / 11 only.** Other operating systems are unaffected (the plugin silently skips non-Windows messages at load time).
 
+## 安装
+
+refer <https://github.com/naer-lily/krita-shortcut-fix>。
+
 ## Visual comparison
 
 ```
