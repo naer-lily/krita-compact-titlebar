@@ -1,3 +1,5 @@
+Vibe-coded with deepseek-v4-pro.
+
 # Frameless — Krita Plugin
 
 > [中文版](README_cn.md)
