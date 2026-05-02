@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Service
+ServiceTypes=Krita/PythonPlugin
+X-KDE-Library=compact_titlebar
+X-Python-2-Compatible=false
+X-Krita-Manual=Manual.html
+Name=Compact Titlebar
+Comment=Windows only, A krita plugin for comacting windows native titlebar and menubar 
