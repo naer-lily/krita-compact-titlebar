@@ -1,17 +1,144 @@
 """
-Compact Titlebar — Krita Plugin  (Phase 1 — Prototype)
-Windows only. Adds window control buttons to the right side of the menu bar,
-and makes the menu bar draggable and double-clickable (maximize/restore).
-
-This prototype works alongside the native titlebar — nothing is removed yet.
+Compact Titlebar — Krita Plugin
+Windows only.  Removes the native titlebar and embeds window controls
+(minimise / maximise / close), drag, and double-click into the menu bar.
 """
 from __future__ import annotations
 
-from typing import Dict, Optional
+import ctypes
+from ctypes import wintypes
+from typing import Dict
 
 from krita import *
-from PyQt5.QtCore import Qt, QEvent, QObject, QPoint
+from PyQt5.QtCore import Qt, QEvent, QObject, QAbstractNativeEventFilter, QCoreApplication
 from PyQt5.QtWidgets import QToolButton, QWidget, QHBoxLayout, QMainWindow
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Windows: DWM + custom chrome via Win32 style manipulation
+#
+#  FramelessWindowHint → WS_POPUP → WM_NCHITTEST is never sent.  Doesn't work.
+#
+#  Correct approach (VS Code / Electron style):
+#  1. Remove WS_CAPTION | WS_SYSMENU from the window style  (titlebar gone)
+#  2. Keep WS_THICKFRAME  (resize + Snap + WM_NCHITTEST all work natively)
+#  3. WM_NCCALCSIZE → return 0 so client rect = window rect  (no visible border gap)
+#  4. WM_NCHITTEST   → return HT* for edge pixels  (wider resize zones)
+#  5. DwmExtendFrameIntoClientArea(0,1,0,0)  → DWM shadows
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class _MARGINS(ctypes.Structure):
+    _fields_ = [
+        ("cxLeftWidth",    ctypes.c_int),
+        ("cxRightWidth",   ctypes.c_int),
+        ("cyTopHeight",    ctypes.c_int),
+        ("cyBottomHeight", ctypes.c_int),
+    ]
+
+
+def _dwm_extend(hwnd: int) -> bool:
+    """Tell DWM we are using custom chrome → shadows."""
+    try:
+        margins = _MARGINS(0, 1, 0, 0)
+        ctypes.windll.dwmapi.DwmExtendFrameIntoClientArea(
+            hwnd, ctypes.byref(margins))
+        return True
+    except Exception:
+        return False
+
+
+# Win32 constants
+GWL_STYLE      = -16
+GWL_EXSTYLE    = -20
+WS_CAPTION     = 0x00C00000    # titlebar + system menu icons
+WS_SYSMENU     = 0x00080000    # Alt+Space menu
+WS_THICKFRAME  = 0x00040000    # resize borders
+WS_EX_NOREDIRECTIONBITMAP = 0x00200000
+SWP_FLAGS      = 0x0020 | 0x0002 | 0x0001 | 0x0004   # FRAMECHANGED|NOMOVE|NOSIZE|NOZORDER
+
+WM_NCCALCSIZE  = 0x0083
+WM_NCHITTEST   = 0x0084
+WM_NCLBUTTONDOWN = 0x00A1
+
+HTLEFT         = 10
+HTRIGHT        = 11
+HTTOP          = 12
+HTTOPLEFT      = 13
+HTTOPRIGHT     = 14
+HTBOTTOM       = 15
+HTBOTTOMLEFT   = 16
+HTBOTTOMRIGHT  = 17
+
+
+def _remove_caption(hwnd: int):
+    """Remove WS_CAPTION | WS_SYSMENU but keep WS_THICKFRAME."""
+    user32 = ctypes.windll.user32
+    style = user32.GetWindowLongW(hwnd, GWL_STYLE)
+    style &= ~(WS_CAPTION | WS_SYSMENU)
+    style |= WS_THICKFRAME    # ensure it's on
+    user32.SetWindowLongW(hwnd, GWL_STYLE, style)
+    # Also fix the WS_EX style: remove the redirection bitmap which can cause
+    # rendering artifacts with custom frame
+    ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+    ex_style &= ~WS_EX_NOREDIRECTIONBITMAP
+    user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style)
+    user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, SWP_FLAGS)
+
+
+class _WinFrameFilter(QAbstractNativeEventFilter):
+    """
+    Per-window native event filter.
+    - WM_NCCALCSIZE:  return 0 → client rect = window rect (no border gap).
+    - WM_NCHITTEST:   return HT* for edge pixels → resize + Snap.
+    """
+
+    BORDER = 6
+
+    def __init__(self, qwin: QMainWindow):
+        super().__init__()
+        self._hwnd = int(qwin.winId())
+        self._qwin = qwin
+
+    def nativeEventFilter(self, event_type: bytes, message):
+        if event_type != b"windows_generic_MSG":
+            return False, 0
+
+        msg = wintypes.MSG.from_address(int(message))
+        if msg.hWnd != self._hwnd:
+            return False, 0
+
+        # ---- WM_NCCALCSIZE: client rect = window rect (no border gap) ----
+        if msg.message == WM_NCCALCSIZE:
+            if msg.wParam:
+                return True, 0
+            return False, 0
+
+        # ---- WM_NCHITTEST: custom resize edge zones ----------------------
+        if msg.message == WM_NCHITTEST:
+            x = ctypes.c_short(msg.lParam & 0xFFFF).value
+            y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
+
+            g = self._qwin.geometry()
+            rx = x - g.x()
+            ry = y - g.y()
+            rw = g.width()
+            rh = g.height()
+
+            left   = rx < self.BORDER
+            right  = rx > rw - self.BORDER
+            top    = ry < self.BORDER
+            bottom = ry > rh - self.BORDER
+
+            if top and left:     return True, HTTOPLEFT
+            if top and right:    return True, HTTOPRIGHT
+            if bottom and left:  return True, HTBOTTOMLEFT
+            if bottom and right: return True, HTBOTTOMRIGHT
+            if left:             return True, HTLEFT
+            if right:            return True, HTRIGHT
+            if top:              return True, HTTOP
+            if bottom:           return True, HTBOTTOM
+
+        return False, 0
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -20,59 +147,45 @@ from PyQt5.QtWidgets import QToolButton, QWidget, QHBoxLayout, QMainWindow
 
 class _MenubarEventFilter(QObject):
     """
-    Installed on QMenuBar to intercept mouse events on *empty* menubar space
-    (i.e. where no QAction sits).  Menu-item clicks pass through normally.
+    Installed on QMenuBar.  Drag starts on mouse MOVE (not press) so that
+    double-click to maximize still works.
     """
 
-    DRAG_THRESHOLD = 5          # px of movement before we call it a drag
+    DRAG_THRESHOLD = 5
 
     def __init__(self, qwin: QMainWindow):
         super().__init__()
-        self._qwin = qwin
-        self._drag_start: Optional[QPoint] = None
-        self._dragging: bool = False
-
-    # -- eventFilter ----------------------------------------------------------
+        self._qwin      = qwin
+        self._hwnd      = int(qwin.winId())
+        self._press_pos = None       # QPoint where mouse was pressed (global)
 
     def eventFilter(self, obj: QObject, event: QEvent):
         etype = event.type()
 
-        # ----- Mouse press on empty space -----
         if etype == QEvent.MouseButtonPress:
             if obj.actionAt(event.pos()) is None:
-                # Qt ≥ 5.15  →  hand the drag to the OS window manager (clean & native)
-                handle = self._qwin.windowHandle()
-                if handle is not None and hasattr(handle, 'startSystemMove'):
-                    handle.startSystemMove()
-                    return True
-
-                # Fallback for older Qt  →  track a manual drag
-                self._drag_start = event.globalPos()
-                self._dragging = False
-                return True             # consume – don't forward to menubar
-
-            # Click landed on a menu action → pass through
+                self._press_pos = event.globalPos()
+                # Don't consume — double-click needs to see this press too
+                return False
             return super().eventFilter(obj, event)
 
-        # ----- Mouse move (manual drag fallback) -----
         if etype == QEvent.MouseMove:
-            if self._drag_start is not None:
-                d = event.globalPos() - self._drag_start
-                if not self._dragging and d.manhattanLength() >= self.DRAG_THRESHOLD:
-                    self._dragging = True
-                if self._dragging:
-                    self._qwin.move(self._qwin.pos() + d)
-                    self._drag_start = event.globalPos()
-                return True
+            if self._press_pos is not None:
+                if (event.globalPos() - self._press_pos).manhattanLength() >= self.DRAG_THRESHOLD:
+                    self._press_pos = None
+                    # WS_THICKFRAME is present → Aero Snap works natively
+                    ctypes.windll.user32.ReleaseCapture()
+                    ctypes.windll.user32.SendMessageW(
+                        self._hwnd, WM_NCLBUTTONDOWN, 2, 0)
+                    return True
+            return super().eventFilter(obj, event)
 
-        # ----- Mouse release → end drag -----
         if etype == QEvent.MouseButtonRelease:
-            self._drag_start = None
-            self._dragging = False
-            # let menubar handle the release normally (e.g. closing a popup)
+            self._press_pos = None
+            return super().eventFilter(obj, event)
 
-        # ----- Double-click on empty space → toggle maximize / restore -----
         if etype == QEvent.MouseButtonDblClick:
+            self._press_pos = None
             if obj.actionAt(event.pos()) is None:
                 if self._qwin.isMaximized():
                     self._qwin.showNormal()
@@ -148,12 +261,16 @@ class CompactTitlebarExtension(Extension):
         state_filter = _WindowStateFilter(_update_max)
         qwin.installEventFilter(state_filter)
 
+        # 4. Frameless  —  remove native titlebar, keep DWM shadows & resize
+        native_filter = _make_frameless(qwin)
+
         self._managed[obj_name] = {
-            'corner':        corner,
+            'corner':         corner,
             'menubar_filter': menubar_filter,
-            'state_filter':  state_filter,
-            'menubar':       menubar,
-            'qwin':          qwin,
+            'state_filter':   state_filter,
+            'native_filter':  native_filter,
+            'menubar':        menubar,
+            'qwin':           qwin,
         }
 
         # Cleanup when the Krita window closes  —  capture objectName by value
@@ -166,6 +283,27 @@ class CompactTitlebarExtension(Extension):
         d = self._managed.pop(obj_name)
         d['menubar'].removeEventFilter(d['menubar_filter'])
         d['qwin'].removeEventFilter(d['state_filter'])
+        if d['native_filter'] is not None:
+            QCoreApplication.instance().removeNativeEventFilter(d['native_filter'])
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Frameless helper
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _make_frameless(qwin: QMainWindow):
+    """Remove native titlebar via Win32 style bits — keep WS_THICKFRAME for resize+Snap."""
+    hwnd = int(qwin.winId())
+
+    _dwm_extend(hwnd)
+
+    # Remove WS_CAPTION but KEEP WS_THICKFRAME (critical for resize + Snap + NCHITTEST)
+    _remove_caption(hwnd)
+
+    nc_filter = _WinFrameFilter(qwin)
+    QCoreApplication.instance().installNativeEventFilter(nc_filter)
+
+    return nc_filter
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
