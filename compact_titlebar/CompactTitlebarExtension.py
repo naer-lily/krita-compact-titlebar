@@ -468,6 +468,20 @@ class CompactTitlebarExtension(Extension):
         corner, btn_max = _make_window_controls(qwin, obj_name, menubar)
         menubar.setCornerWidget(corner, Qt.TopRightCorner)
 
+        # ---- 1.5 Polling guard: Krita MDI max may replace the corner ----
+        from PyQt5.QtCore import QTimer
+        poll_timer = QTimer(window.qwindow())
+        def _poll_corner():
+            current_corner_widget = menubar.cornerWidget(Qt.TopRightCorner)
+            if current_corner_widget is not corner:
+                if current_corner_widget:
+                    current_corner_widget.hide()
+                menubar.setCornerWidget(corner, Qt.TopRightCorner)
+                corner.show()
+                
+        poll_timer.timeout.connect(_poll_corner)
+        poll_timer.start(100)   # check every 500 ms
+
         # ---- 2. Menubar event filter: drag + double-click -----------------
         menubar_filter = _MenubarEventFilter(qwin)
         menubar.installEventFilter(menubar_filter)
@@ -482,6 +496,7 @@ class CompactTitlebarExtension(Extension):
                 btn_max.setToolTip("Maximize")
 
         state_filter = _WindowStateFilter(_update_max)
+        _update_max() # run it directly once
         qwin.installEventFilter(state_filter)
 
         # ---- 4. Frameless window -----------------------------------------
@@ -493,6 +508,7 @@ class CompactTitlebarExtension(Extension):
             'menubar_filter': menubar_filter,
             'state_filter':   state_filter,
             'native_filter':  native_filter,
+            'poll_timer':     poll_timer,
             'menubar':        menubar,
             'qwin':           qwin,
         }
@@ -509,6 +525,7 @@ class CompactTitlebarExtension(Extension):
         if obj_name not in self._managed:
             return
         d = self._managed.pop(obj_name)
+        d['poll_timer'].stop()
         d['menubar'].removeEventFilter(d['menubar_filter'])
         d['qwin'].removeEventFilter(d['state_filter'])
         if d['native_filter'] is not None:
@@ -622,7 +639,8 @@ def _make_window_controls(qwin: QMainWindow, obj_name: str, menubar):
     def _on_close():
         for w in Krita.instance().windows():
             if w.qwindow().objectName() == obj_name:
-                w.close()     # Krita's close — with save prompts
+                # w.close() # Krita's close seems doesn't work
+                w.qwindow().close()    
                 return
         qwin.close()          # fallback (shouldn't normally be reached)
 
