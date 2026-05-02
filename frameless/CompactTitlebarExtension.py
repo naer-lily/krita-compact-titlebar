@@ -1,6 +1,6 @@
 """
-Compact Titlebar — Krita Plugin  (Windows 10+ only)
-=====================================================
+Frameless — Krita Plugin  (Windows 10+ only)
+==============================================
 
 Replaces the native Windows titlebar with a compact header:
 the menu bar itself serves as the window's drag handle and carries

@@ -1,4 +1,4 @@
-# Compact Titlebar — Krita Plugin
+# Frameless — Krita Plugin
 
 > [中文版](README_cn.md)
 
@@ -22,7 +22,7 @@ Native Krita:
 │  canvas                                      │
 └─────────────────────────────────────────────┘
 
-Compact Titlebar:
+Frameless:
 ┌─────────────────────────────────────────────┐
 │  File  Edit  View  ...          ─  □  ✕  │  ← menu bar == titlebar
 ├─────────────────────────────────────────────┤
@@ -36,12 +36,12 @@ Compact Titlebar:
 
 ## Installation
 
-1. Copy the `compact_titlebar/` folder into Krita's plugin directory:
+1. Copy the `frameless/` folder into Krita's plugin directory:
    ```
    %APPDATA%\krita\pykrita\
    ```
 2. Restart Krita
-3. Enable **Compact Titlebar** in **Settings → Configure Krita → Python Plugin Manager**
+3. Enable **Frameless** in **Settings → Configure Krita → Python Plugin Manager**
 
 ## Technical overview
 
@@ -72,9 +72,9 @@ Krita's Python API objects (`Window`, `View`, `Document`, etc.) are **ephemeral 
 ### File structure
 
 ```
-compact_titlebar/
+frameless/
 ├── compact_titlebar.desktop              # Krita plugin descriptor
-├── compact_titlebar/
+├── frameless/
 │   ├── __init__.py                       # Python package entry
 │   ├── CompactTitlebarExtension.py       # main logic (heavily commented)
 │   ├── krita.pyi                         # Krita Python API type stubs

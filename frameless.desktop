@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Service
+ServiceTypes=Krita/PythonPlugin
+X-KDE-Library=frameless
+X-Python-2-Compatible=false
+X-Krita-Manual=Manual.html
+Name=Frameless
+Comment=Windows only, A Krita plugin for frameless windows with custom chrome

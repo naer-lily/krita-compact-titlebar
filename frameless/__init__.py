@@ -1,0 +1,1 @@
+from frameless.CompactTitlebarExtension import *
