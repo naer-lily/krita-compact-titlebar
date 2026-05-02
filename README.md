@@ -6,9 +6,11 @@ A Krita plugin that replaces the native Windows titlebar with a compact header �
 
 **Windows 10 / 11 only.** Other operating systems are unaffected (the plugin silently skips non-Windows messages at load time).
 
-## 安装
+![](image.png)
 
-refer <https://github.com/naer-lily/krita-shortcut-fix>。
+## Installation
+
+refer <https://github.com/naer-lily/krita-shortcut-fix>. **A manuall restart is required**.
 
 ## Visual comparison
 
@@ -33,15 +35,6 @@ Frameless:
 - Three window control buttons appear on the right of the menu bar
 - Empty menubar space (where no menu action sits) can be dragged to move the window; Aero Snap (half-screen / quarter-screen) works when dragged to a screen edge
 - Double-click empty menubar space to toggle maximise / restore
-
-## Installation
-
-1. Copy the `frameless/` folder into Krita's plugin directory:
-   ```
-   %APPDATA%\krita\pykrita\
-   ```
-2. Restart Krita
-3. Enable **Frameless** in **Settings → Configure Krita → Python Plugin Manager**
 
 ## Technical overview
 

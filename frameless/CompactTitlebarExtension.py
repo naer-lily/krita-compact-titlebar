@@ -387,7 +387,7 @@ def _make_window_controls(qwin: QMainWindow):
     btn_w = BTN_WIDTH
 
     w = QWidget()
-    w.setObjectName("compact-titlebar-controls")
+    w.setObjectName("frameless-controls")
     w.setFixedHeight(bar_h)
     lay = QHBoxLayout(w)
     lay.setContentsMargins(0, 0, 0, 0)

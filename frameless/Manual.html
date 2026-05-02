@@ -1,0 +1,124 @@
+<h1 id="frameless-krita-plugin">Frameless — Krita Plugin</h1>
+
+<p>A Krita plugin that replaces the native Windows titlebar with a
+compact header — window control buttons (minimise / maximise / close)
+are embedded on the right side of the menu bar, and empty menubar space
+can be dragged to move the window or double-clicked to toggle
+maximise.</p>
+<p><strong>Windows 10 / 11 only.</strong> Other operating systems are
+unaffected (the plugin silently skips non-Windows messages at load
+time).</p>
+<h2 id="installation">Installation</h2>
+<p>refer <a href="https://github.com/naer-lily/krita-shortcut-fix"
+class="uri">https://github.com/naer-lily/krita-shortcut-fix</a>.
+<strong>A manuall restart is required</strong>.</p>
+<h2 id="visual-comparison">Visual comparison</h2>
+<pre><code>Native Krita:
+┌─────────────────────────────────────────────┐
+│  untitled.kra  —  Krita         ─  □  ✕  │  ← native titlebar
+├─────────────────────────────────────────────┤
+│  File  Edit  View  ...                      │  ← menu bar
+├─────────────────────────────────────────────┤
+│  canvas                                      │
+└─────────────────────────────────────────────┘
+
+Frameless:
+┌─────────────────────────────────────────────┐
+│  File  Edit  View  ...          ─  □  ✕  │  ← menu bar == titlebar
+├─────────────────────────────────────────────┤
+│  canvas                                      │
+└─────────────────────────────────────────────┘</code></pre>
+<ul>
+<li>Three window control buttons appear on the right of the menu
+bar</li>
+<li>Empty menubar space (where no menu action sits) can be dragged to
+move the window; Aero Snap (half-screen / quarter-screen) works when
+dragged to a screen edge</li>
+<li>Double-click empty menubar space to toggle maximise / restore</li>
+</ul>
+<h2 id="technical-overview">Technical overview</h2>
+<h3 id="why-not-qt.framelesswindowhint">Why not
+<code>Qt.FramelessWindowHint</code></h3>
+<p>The obvious approach is to call
+<code>QMainWindow.setWindowFlags(Qt.FramelessWindowHint)</code>, but on
+Windows this changes the underlying HWND to <code>WS_POPUP</code> style
+— which means Windows <strong>stops sending <code>WM_NCHITTEST</code>
+entirely</strong>. Without <code>WM_NCHITTEST</code> there is no way to
+provide resize cursors at window edges or implement edge-drag
+resizing.</p>
+<h3 id="the-correct-approach-manual-win32-style-manipulation">The
+correct approach: manual Win32 style manipulation</h3>
+<p>Our implementation is equivalent to how VS Code / Chrome / Electron
+handle custom titlebars at the lowest level:</p>
+<table>
+<colgroup>
+<col style="width: 35%" />
+<col style="width: 35%" />
+<col style="width: 29%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Step</th>
+<th>What</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>1. Win32 style</td>
+<td>Remove <code>WS_CAPTION</code> (titlebar), keep
+<code>WS_THICKFRAME</code> (borders)</td>
+<td><code>WS_THICKFRAME</code> present → Windows still sends
+<code>WM_NCHITTEST</code> → resize + Aero Snap work</td>
+</tr>
+<tr class="even">
+<td>2. DWM frame extension</td>
+<td><code>DwmExtendFrameIntoClientArea(0, 1, 0, 0)</code></td>
+<td>Tells the Desktop Window Manager “custom chrome in use” → DWM
+renders drop shadows</td>
+</tr>
+<tr class="odd">
+<td>3. <code>WM_NCCALCSIZE</code></td>
+<td>Return 0 → client rect = window rect</td>
+<td><code>WS_THICKFRAME</code> borders become invisible (0 px wide);
+window appears borderless</td>
+</tr>
+<tr class="even">
+<td>4. <code>WM_NCHITTEST</code></td>
+<td>Return <code>HTLEFT</code> / <code>HTRIGHT</code> etc. for the outer
+6 px</td>
+<td>Windows shows the correct resize cursor and handles edge-dragging
+natively</td>
+</tr>
+<tr class="odd">
+<td>5. <code>WM_GETMINMAXINFO</code></td>
+<td>Set max bounds to monitor work area (excluding taskbar)</td>
+<td>Maximised window does not cover the taskbar</td>
+</tr>
+</tbody>
+</table>
+<h3 id="drag-handling">Drag handling</h3>
+<p>A Qt event filter is installed on the menu bar. Window drag starts on
+<strong>MouseMove after a 5 px threshold</strong> (not on MousePress —
+this preserves double-click detection). The drag itself uses Qt’s
+<code>QWindow.startSystemMove()</code>, which internally calls
+<code>DefWindowProc(WM_SYSCOMMAND, SC_MOVE | HTCAPTION)</code> — Aero
+Snap is triggered automatically.</p>
+<h3 id="krita-specific-caveats">Krita-specific caveats</h3>
+<p>Krita’s Python API objects (<code>Window</code>, <code>View</code>,
+<code>Document</code>, etc.) are <strong>ephemeral thin
+wrappers</strong> — they can be garbage-collected at any time. Never
+capture their references in signal callbacks or asynchronous code.
+Instead, cache stable underlying Qt object identifiers (like
+<code>qwin.objectName()</code>) and look up fresh wrappers at call time
+via <code>Krita.instance().windows()</code>.</p>
+<h3 id="file-structure">File structure</h3>
+<pre><code>frameless/
+├── compact_titlebar.desktop              # Krita plugin descriptor
+├── frameless/
+│   ├── __init__.py                       # Python package entry
+│   ├── CompactTitlebarExtension.py       # main logic (heavily commented)
+│   ├── krita.pyi                         # Krita Python API type stubs
+│   └── Manual.html                       # Krita plugin help page
+├── README.md                              # this file (English)
+└── README_cn.md                           # Chinese version</code></pre>
