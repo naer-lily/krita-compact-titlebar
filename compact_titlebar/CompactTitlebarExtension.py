@@ -465,7 +465,9 @@ class CompactTitlebarExtension(Extension):
             self._teardown_window(obj_name)
 
         # ---- 1. Corner widget: minimise / maximise / close buttons --------
-        corner, btn_max = _make_window_controls(qwin, obj_name, menubar)
+        stylesheet = _make_btn_stylesheet(menubar)
+        corner, btn_max = _make_window_controls(qwin, obj_name, menubar, stylesheet)
+        corner.setPalette(menubar.palette())    # initial palette sync
         menubar.setCornerWidget(corner, Qt.TopRightCorner)
 
         # ---- 1.5 Polling guard: Krita MDI max may replace the corner ----
@@ -498,6 +500,17 @@ class CompactTitlebarExtension(Extension):
         state_filter = _WindowStateFilter(_update_max)
         _update_max() # run it directly once
         qwin.installEventFilter(state_filter)
+
+        # ---- Theme change: sync button palette from menubar -------------
+        # Krita's Window.themeChanged doesn't fire reliably — use Qt's
+        # QApplication.paletteChanged, which always emits on theme switch.
+        from PyQt5.QtWidgets import QApplication
+        def _on_theme_changed():
+            pal = menubar.palette()
+            corner.setPalette(pal)
+            for btn in corner.findChildren(QToolButton):
+                btn.setPalette(pal)
+        QApplication.instance().paletteChanged.connect(_on_theme_changed)
 
         # ---- 4. Frameless window -----------------------------------------
         native_filter = _make_frameless(qwin)
@@ -562,30 +575,30 @@ def _make_frameless(qwin: QMainWindow):
 #  Window control buttons
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Stylesheet for the three window-control QToolButtons.
-# Uses the system palette for text colour so it adapts to Krita's theme.
-# The close button gets a red hover background (matching the native behaviour).
-
-_BTN_STYLE = """
+def _make_btn_stylesheet(_menubar=None) -> str:
+    """Generate a stylesheet for the window control buttons.
+    Text colour is intentionally NOT set — the buttons inherit it from the
+    menubar's palette, which follows Krita's active theme automatically.
+    Hover uses `palette(highlight)` for automatic theme adaptation."""
+    return """
     QToolButton {
         background: transparent;
         border: none;
         font-family: "Segoe MDL2 Assets", "Segoe UI Symbol", "Segoe UI", sans-serif;
-        color: palette(window-text);
         padding: 0;
         margin: 0;
     }
     QToolButton:hover {
-        background: rgba(128, 128, 128, 0.25);
+        background: palette(highlight);
     }
     QToolButton#titlebar-close:hover {
         background: #E81123;
         color: white;
     }
-"""
+    """
 
 
-def _make_window_controls(qwin: QMainWindow, obj_name: str, menubar):
+def _make_window_controls(qwin: QMainWindow, obj_name: str, menubar, stylesheet: str):
     """Create the minimise / maximise / close button widget.
 
     The widget is placed in the menu bar's top-right corner via
@@ -607,20 +620,20 @@ def _make_window_controls(qwin: QMainWindow, obj_name: str, menubar):
     lay.setSpacing(0)
 
     # -- Minimise button ---------------------------------------------------
-    b_min = QToolButton()
+    b_min = QToolButton(w)          # w = parent → palette inherits
     b_min.setText("\u2500")            # "─" (horizontal bar, minimal)
     b_min.setObjectName("titlebar-minimize")
     b_min.setFixedSize(btn_w, bar_h)
     b_min.setToolTip("Minimise")
-    b_min.setStyleSheet(_BTN_STYLE)
+    b_min.setStyleSheet(stylesheet)
     # Qt's showMinimized() directly minimises the QMainWindow.
     b_min.clicked.connect(qwin.showMinimized)
 
     # -- Maximise / Restore button -----------------------------------------
-    b_max = QToolButton()
+    b_max = QToolButton(w)
     b_max.setObjectName("titlebar-maximize")
     b_max.setFixedSize(btn_w, bar_h)
-    b_max.setStyleSheet(_BTN_STYLE)
+    b_max.setStyleSheet(stylesheet)
 
     def _toggle():
         if qwin.isMaximized():
@@ -644,12 +657,12 @@ def _make_window_controls(qwin: QMainWindow, obj_name: str, menubar):
                 return
         qwin.close()          # fallback (shouldn't normally be reached)
 
-    b_close = QToolButton()
+    b_close = QToolButton(w)
     b_close.setText("\u2715")          # "✕" (cross)
     b_close.setObjectName("titlebar-close")
     b_close.setFixedSize(btn_w, bar_h)
     b_close.setToolTip("Close")
-    b_close.setStyleSheet(_BTN_STYLE)
+    b_close.setStyleSheet(stylesheet)
     b_close.clicked.connect(_on_close)
 
     # Assemble
