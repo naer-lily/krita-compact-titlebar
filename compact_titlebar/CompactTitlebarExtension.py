@@ -59,6 +59,7 @@ SWP_FLAGS      = 0x0020 | 0x0002 | 0x0001 | 0x0004   # FRAMECHANGED|NOMOVE|NOSIZ
 WM_NCCALCSIZE  = 0x0083
 WM_NCHITTEST   = 0x0084
 WM_NCLBUTTONDOWN = 0x00A1
+WM_GETMINMAXINFO = 0x0024
 
 HTLEFT         = 10
 HTRIGHT        = 11
@@ -68,6 +69,25 @@ HTTOPRIGHT     = 14
 HTBOTTOM       = 15
 HTBOTTOMLEFT   = 16
 HTBOTTOMRIGHT  = 17
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize",    wintypes.DWORD),
+        ("rcMonitor", wintypes.RECT),
+        ("rcWork",    wintypes.RECT),
+        ("dwFlags",   wintypes.DWORD),
+    ]
+
+
+class _MINMAXINFO(ctypes.Structure):
+    _fields_ = [
+        ("ptReserved",     wintypes.POINT),
+        ("ptMaxSize",      wintypes.POINT),
+        ("ptMaxPosition",  wintypes.POINT),
+        ("ptMinTrackSize", wintypes.POINT),
+        ("ptMaxTrackSize", wintypes.POINT),
+    ]
 
 
 def _remove_caption(hwnd: int):
@@ -107,6 +127,23 @@ class _WinFrameFilter(QAbstractNativeEventFilter):
         if msg.hWnd != self._hwnd:
             return False, 0
 
+        # ---- WM_GETMINMAXINFO: fix maximised bounds to work area --------
+        if msg.message == WM_GETMINMAXINFO:
+            monitor = ctypes.windll.user32.MonitorFromWindow(
+                self._hwnd, 2)  # MONITOR_DEFAULTTONEAREST
+            mi = _MONITORINFO()
+            mi.cbSize = ctypes.sizeof(_MONITORINFO)
+            ctypes.windll.user32.GetMonitorInfoW(
+                monitor, ctypes.byref(mi))
+
+            mmi = ctypes.cast(
+                msg.lParam, ctypes.POINTER(_MINMAXINFO)).contents
+            mmi.ptMaxPosition.x = mi.rcWork.left
+            mmi.ptMaxPosition.y = mi.rcWork.top
+            mmi.ptMaxSize.x     = mi.rcWork.right - mi.rcWork.left
+            mmi.ptMaxSize.y     = mi.rcWork.bottom - mi.rcWork.top
+            return True, 0
+
         # ---- WM_NCCALCSIZE: client rect = window rect (no border gap) ----
         if msg.message == WM_NCCALCSIZE:
             if msg.wParam:
@@ -115,6 +152,9 @@ class _WinFrameFilter(QAbstractNativeEventFilter):
 
         # ---- WM_NCHITTEST: custom resize edge zones ----------------------
         if msg.message == WM_NCHITTEST:
+            # Maximised: no edge resizing
+            if self._qwin.isMaximized():
+                return False, 0
             x = ctypes.c_short(msg.lParam & 0xFFFF).value
             y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
 
@@ -193,7 +233,22 @@ class _MenubarEventFilter(QObject):
                     self._qwin.showMaximized()
                 return True
 
+        # Right-click on empty space → native window menu
+        if etype == QEvent.MouseButtonPress and event.button() == Qt.RightButton:
+            if obj.actionAt(event.pos()) is None:
+                self._show_system_menu(event.globalPos())
+                return True
+
         return super().eventFilter(obj, event)
+
+    def _show_system_menu(self, pos):
+        """Show the native window system menu at the given global position."""
+        user32 = ctypes.windll.user32
+        hmenu = user32.GetSystemMenu(self._hwnd, False)
+        cmd = user32.TrackPopupMenu(
+            hmenu, 0x0000, pos.x(), pos.y(), 0, self._hwnd, None)
+        if cmd:
+            user32.PostMessageW(self._hwnd, WM_SYSCOMMAND, cmd, 0)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
