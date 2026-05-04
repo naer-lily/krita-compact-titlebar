@@ -28,16 +28,17 @@ class _FileNameSection(QLabel):
             if doc is not None:
                 fname = doc.fileName()
                 self.setText(fname if fname else "")
+                self.show()
             else:
-                self.setText("")
+                self.hide()
         except Exception:
-            self.setText("")
+            self.hide()
 
     def teardown(self):
         self._timer.stop()
 
 
-def create(window, bar_h: int, config: dict):
+def create(window, bar_h: int, config: dict, ctx):
     """Factory: CurrentFileName component.
 
     config keys (all optional):
@@ -46,4 +47,7 @@ def create(window, bar_h: int, config: dict):
     poll_ms = config.get('poll_ms', DEFAULT_POLL_MS)
     if not isinstance(poll_ms, int) or poll_ms <= 0:
         poll_ms = DEFAULT_POLL_MS
-    return _FileNameSection(bar_h, poll_ms)
+
+    widget = _FileNameSection(bar_h, poll_ms)
+    ctx.teardown.connect(widget.teardown)
+    return widget

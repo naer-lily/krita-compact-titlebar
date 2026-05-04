@@ -1,7 +1,10 @@
 """Component registry and config loader for the frameless titlebar.
 
 Each component is a module that exposes:
-    create(window, bar_h, config) -> QWidget
+    create(window, bar_h, config, ctx) -> QWidget
+
+where ctx is a _ComponentContext carrying shared signals
+(palette_changed, window_state_changed, teardown).
 
 Add new components by:
 1. Creating a module in this directory with a `create` function
@@ -11,6 +14,8 @@ import json
 import os
 from typing import Dict, Callable, List
 
+from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt5.QtGui import QPalette
 from PyQt5.QtWidgets import QWidget
 from krita import Window
 
@@ -20,9 +25,20 @@ from . import spacer
 from . import window_control
 
 # ---------------------------------------------------------------------------
+# Shared signal bus — components subscribe; _TitleBar emits
+# ---------------------------------------------------------------------------
+class _ComponentContext(QObject):
+    palette_changed       = pyqtSignal(QPalette)
+    window_state_changed  = pyqtSignal()
+    teardown              = pyqtSignal()
+
+
+# ---------------------------------------------------------------------------
 # Component registry: name → factory function
 # ---------------------------------------------------------------------------
-COMPONENT_REGISTRY: Dict[str, Callable[[Window, int, dict], QWidget]] = {
+COMPONENT_REGISTRY: Dict[
+    str, Callable[[Window, int, dict, _ComponentContext], QWidget]
+] = {
     'CurrentFileName':  filename.create,
     'OriginalMenuBar':  menubar.create,
     'Spacer':           spacer.create,
@@ -31,10 +47,9 @@ COMPONENT_REGISTRY: Dict[str, Callable[[Window, int, dict], QWidget]] = {
 
 
 # ---------------------------------------------------------------------------
-# Config file path — sibling of this package's parent (the plugin root)
+# Config file path
 # ---------------------------------------------------------------------------
 def _config_path() -> str:
-    """Return the absolute path to config.json (in the plugin root)."""
     return os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         'config.json',
@@ -45,7 +60,6 @@ def _config_path() -> str:
 # Validation (simple, no pydantic)
 # ---------------------------------------------------------------------------
 def _validate_layout(layout: list):
-    """Raise ValueError if the layout list is malformed."""
     if not isinstance(layout, list):
         raise ValueError(f"'layout' must be a list, got {type(layout).__name__}")
 
@@ -75,10 +89,6 @@ def _validate_layout(layout: list):
 # Public API
 # ---------------------------------------------------------------------------
 def load_config() -> List[dict]:
-    """Load and validate config.json, returning the layout list.
-
-    Raises ValueError on invalid config.
-    """
     path = _config_path()
     if not os.path.exists(path):
         raise FileNotFoundError(f"config.json not found at {path}")
@@ -88,7 +98,6 @@ def load_config() -> List[dict]:
 
     if not isinstance(raw, dict):
         raise ValueError("config.json root must be a dict")
-
     if 'layout' not in raw:
         raise ValueError("config.json must have a 'layout' key")
 

@@ -1,6 +1,7 @@
 """OriginalMenuBar — a real QMenuBar hosting the original Krita QMenu objects."""
 from typing import List
 
+from PyQt5.QtGui import QPalette
 from PyQt5.QtWidgets import QMenuBar, QMenu, QSizePolicy
 
 
@@ -19,10 +20,17 @@ class _MenuBarSection(QMenuBar):
         self.setFixedHeight(bar_h)
 
         for menu in menus:
+            # WARNING: DON'T DO IT! IT WILL RUIN ITS FUNCTION
+            # menu.setParent(self)
             self.addMenu(menu)
 
+    def apply_palette(self, pal: QPalette):
+        self.setPalette(pal)
+        for menu in self.findChildren(QMenu):
+            menu.setPalette(pal)
 
-def create(window, bar_h: int, config: dict):
+
+def create(window, bar_h: int, config: dict, ctx):
     """Factory: OriginalMenuBar component.
 
     Extracts all QMenu objects from the current QMainWindow.menuBar()
@@ -40,4 +48,6 @@ def create(window, bar_h: int, config: dict):
         if m is not None:
             menus.append(m)
 
-    return _MenuBarSection(menus, bar_h)
+    widget = _MenuBarSection(menus, bar_h)
+    ctx.palette_changed.connect(widget.apply_palette)
+    return widget

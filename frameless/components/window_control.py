@@ -2,7 +2,7 @@
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPalette
 from PyQt5.QtWidgets import (
-    QToolButton, QWidget, QHBoxLayout, QStyle, QStyleOption,
+    QToolButton, QWidget, QHBoxLayout,
 )
 from krita import Krita
 
@@ -103,7 +103,7 @@ class _WindowControlSection(QWidget):
             btn.setPalette(pal)
 
 
-def create(window, bar_h: int, config: dict):
+def create(window, bar_h: int, config: dict, ctx):
     """Factory: WindowControl component.
 
     config keys (all optional):
@@ -123,4 +123,10 @@ def create(window, bar_h: int, config: dict):
         close_hover = DEFAULT_CLOSE_HOVER
 
     stylesheet = _build_stylesheet(close_hover)
-    return _WindowControlSection(qwin, obj_name, bar_h, btn_w, stylesheet)
+    widget = _WindowControlSection(qwin, obj_name, bar_h, btn_w, stylesheet)
+
+    # Subscribe to shared signals
+    ctx.palette_changed.connect(widget.apply_palette)
+    ctx.window_state_changed.connect(widget.update_maximize_icon)
+
+    return widget

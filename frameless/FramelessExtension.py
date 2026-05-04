@@ -8,7 +8,8 @@ of its actions; the titlebar is set as a TopLeftCorner widget
 with a Resize filter forcing full width.
 
 Component layout is driven by config.json — see components/ for
-the individual section implementations.
+the individual section implementations.  Components communicate
+with the titlebar via a shared _ComponentContext (SignalBus).
 
 How it works (high level)
 -------------------------
@@ -37,17 +38,17 @@ from krita import *
 from PyQt5.QtCore import (
     Qt, QEvent, QObject, QAbstractNativeEventFilter, QCoreApplication, QTimer,
 )
-from PyQt5.QtGui import QMouseEvent, QPalette
+from PyQt5.QtGui import QMouseEvent
 from PyQt5.QtWidgets import (
     QToolButton, QWidget, QHBoxLayout, QMainWindow,
     QMenuBar, QSizePolicy, QApplication,
 )
 
-from .components import COMPONENT_REGISTRY, load_config
+from .components import COMPONENT_REGISTRY, load_config, _ComponentContext
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Configuration — core constants (component-specific ones are in components/)
+#  Configuration
 # ═══════════════════════════════════════════════════════════════════════════════
 
 RESIZE_BORDER_PX       = 6
@@ -55,13 +56,11 @@ MONITOR_DEFAULTTONEAREST = 2
 DRAG_THRESHOLD_PX      = 5
 DWM_TOP_MARGIN         = 1
 CORNER_POLL_MS         = 100
-TITLEBAR_PAD_LEFT      = 4       # px left padding of the titlebar
+TITLEBAR_PAD_LEFT      = 4
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  FRAMELESS WINDOW                                                           ║
-# ║  All Windows-specific code that removes the native titlebar while           ║
-# ║  keeping resize edges, Aero Snap, and DWM shadows.                          ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 class _MARGINS(ctypes.Structure):
@@ -199,7 +198,7 @@ def _make_frameless(qwin: QMainWindow):
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  CUSTOM TITLEBAR  (QWidget — set as TopLeftCorner of the cleared menubar)   ║
+# ║  CUSTOM TITLEBAR                                                            ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 _TITLEBAR_STYLESHEET = """
@@ -210,10 +209,11 @@ _TITLEBAR_STYLESHEET = """
 
 
 class _TitleBar(QWidget):
-    """Custom titlebar placed as a TopLeftCorner widget of the original
-    (cleared) QMenuBar.  A Resize event filter forces it to full width.
+    """Custom titlebar set as a TopLeftCorner widget of the original
+    (cleared) QMenuBar.  A Resize event filter forces full width.
 
     Layout is driven by config.json → COMPONENT_REGISTRY.
+    Components communicate via _ComponentContext (signal bus).
     """
 
     DRAG_THRESHOLD = DRAG_THRESHOLD_PX
@@ -228,6 +228,9 @@ class _TitleBar(QWidget):
         self._original_menubar = original_menubar
         self._press_pos = None
 
+        # Shared signal bus — components subscribe, titlebar emits
+        self._ctx = _ComponentContext(self)
+
         self.setObjectName("frameless-titlebar")
         self.setFixedHeight(bar_h)
         self.setStyleSheet(_TITLEBAR_STYLESHEET)
@@ -238,20 +241,17 @@ class _TitleBar(QWidget):
         layout.setSpacing(0)
 
         for item in layout_config:
-            name = item['name']
-            cfg  = item.get('config', {})
-            factory = COMPONENT_REGISTRY[name]
-            widget = factory(window, bar_h, cfg)
+            name   = item['name']
+            cfg    = item.get('config', {})
+            widget = COMPONENT_REGISTRY[name](window, bar_h, cfg, self._ctx)
             layout.addWidget(widget)
 
-        # ---- Drag & double-click ----------------------------------------
-        # (handled by mouse events on this QWidget — buttons excluded)
-
-        # ---- Window-state tracking for maximise icon --------------------
-        self._state_filter = _WindowStateFilter(self._on_state_changed)
+        # ---- Window-state tracking → signal instead of hasattr ----------
+        self._state_filter = _WindowStateFilter(
+            lambda: self._ctx.window_state_changed.emit())
         qwin.installEventFilter(self._state_filter)
 
-        # ---- Palette ----------------------------------------------------
+        # ---- Palette → signal instead of hasattr ------------------------
         self._apply_menubar_palette()
         QApplication.instance().paletteChanged.connect(
             self._apply_menubar_palette)
@@ -262,9 +262,7 @@ class _TitleBar(QWidget):
         try:
             pal = self._original_menubar.palette()
             self.setPalette(pal)
-            for child in self.findChildren(QWidget):
-                if hasattr(child, 'apply_palette'):
-                    child.apply_palette(pal)
+            self._ctx.palette_changed.emit(pal)
         except Exception:
             pass
 
@@ -310,20 +308,16 @@ class _TitleBar(QWidget):
                 return
         super().mouseDoubleClickEvent(event)
 
-    # -- Window state callback --------------------------------------------
-
-    def _on_state_changed(self):
-        for child in self.findChildren(QWidget):
-            if hasattr(child, 'update_maximize_icon'):
-                child.update_maximize_icon()
-
     # -- Cleanup ----------------------------------------------------------
 
     def teardown(self):
-        for child in self.findChildren(QWidget):
-            if hasattr(child, 'teardown'):
-                child.teardown()
-        self._qwin.removeEventFilter(self._state_filter)
+        # Emit first so components clean themselves up
+        self._ctx.teardown.emit()
+        # QMainWindow may already be deleted — don't crash
+        try:
+            self._qwin.removeEventFilter(self._state_filter)
+        except RuntimeError:
+            pass
         try:
             QApplication.instance().paletteChanged.disconnect(
                 self._apply_menubar_palette)
@@ -374,6 +368,12 @@ class FramelessExtension(Extension):
     def createActions(self, window: Window):
         win_obj_name = window.objectName()
 
+        # ---- Frameless window: do SYNCHRONOUSLY to avoid blue border ----
+        # Win32/DWM calls don't touch the menubar → safe to call now.
+        qwin_sync = window.qwindow()
+        native_filter = _make_frameless(qwin_sync)
+
+        # ---- Menubar mutation: must be async to avoid segfault ----------
         @partial(QTimer.singleShot, 0)
         def _():
             for w in Krita.instance().windows():
@@ -401,14 +401,12 @@ class FramelessExtension(Extension):
                 return
 
             # ---- Build the custom titlebar -------------------------------
-            # Components are created NOW — menubar component extracts
-            # QMenu objects from original_menubar synchronously.
             titlebar = _TitleBar(window_ref, original_menubar, layout_config)
 
-            # ---- Clear the original menubar (menus already extracted) ---
+            # ---- Clear original menubar (menus already extracted) -------
             original_menubar.clear()
 
-            # ---- Set titlebar as TopLeftCorner + full-width Resize ------
+            # ---- Set as TopLeftCorner + full-width Resize filter --------
             original_menubar.setCornerWidget(titlebar, Qt.TopLeftCorner)
             titlebar.show()
             resize_filter = _CornerResizeFilter(original_menubar, titlebar)
@@ -421,23 +419,19 @@ class FramelessExtension(Extension):
                 if cur is not titlebar:
                     if cur is not None:
                         cur.hide()
-                    original_menubar.setCornerWidget(titlebar, Qt.TopLeftCorner)
+                    original_menubar.setCornerWidget(
+                        titlebar, Qt.TopLeftCorner)
                     titlebar.show()
-                
-                # always hide top right corner
+                # Always hide the top-right corner (Krita may inject one)
                 if tr := original_menubar.cornerWidget(Qt.TopRightCorner):
                     tr.hide()
             poll_timer.timeout.connect(_poll_corner)
             poll_timer.start(CORNER_POLL_MS)
 
-            # ---- Frameless window ----------------------------------------
-            native_filter = _make_frameless(qwin)
-
             # ---- Bookkeeping ---------------------------------------------
             self._managed[obj_name] = {
                 'titlebar':       titlebar,
                 'native_filter':  native_filter,
-                'qwin':           qwin,
                 'menubar':        original_menubar,
                 'resize_filter':  resize_filter,
                 'poll_timer':     poll_timer,
@@ -450,13 +444,18 @@ class FramelessExtension(Extension):
             return
         d = self._managed.pop(obj_name)
 
-        d['menubar'].removeEventFilter(d['resize_filter'])
-        d['menubar'].setCornerWidget(None, Qt.TopLeftCorner)
+        # QMainWindow / QMenuBar may already be deleted — safe-guard
+        try:
+            d['menubar'].removeEventFilter(d['resize_filter'])
+            d['menubar'].setCornerWidget(None, Qt.TopLeftCorner)
+        except RuntimeError:
+            pass
         d['poll_timer'].stop()
         d['titlebar'].teardown()
         if d['native_filter'] is not None:
             QCoreApplication.instance().removeNativeEventFilter(
                 d['native_filter'])
+
 
 _EXT = FramelessExtension(Krita.instance())
 Krita.instance().addExtension(_EXT)

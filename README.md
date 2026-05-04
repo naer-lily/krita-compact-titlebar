@@ -38,7 +38,24 @@ Frameless:
 - Menus (File, Edit, …) sit inside a real `QMenuBar` — Alt+letter shortcuts, hover-to-switch, and keyboard navigation all work natively
 - Empty titlebar space can be dragged to move the window; Aero Snap (half-screen / quarter-screen) works when dragged to a screen edge
 - Double-click empty titlebar space to toggle maximise / restore
-- Layout is configurable (currently hardcoded; config UI planned)
+- Layout is configurable via `config.json` — reorder, remove, or add custom components
+
+### Configuration
+
+Edit `frameless/config.json` to customize the titlebar layout:
+
+```json
+{
+    "layout": [
+        {"name": "CurrentFileName", "config": {"poll_ms": 500}},
+        {"name": "OriginalMenuBar", "config": {}},
+        {"name": "Spacer",           "config": {}},
+        {"name": "WindowControl",   "config": {"button_width": 60}}
+    ]
+}
+```
+
+Components are in `frameless/components/` — each exposes a `create(window, bar_h, config)` factory. To add your own, drop a `.py` file in `components/` and register it in `__init__.py`.
 
 ## Technical overview
 
@@ -60,33 +77,33 @@ Our implementation is equivalent to how VS Code / Chrome / Electron handle custo
 
 ### Drag handling
 
-A Qt `mousePressEvent` / `mouseMoveEvent` handler on the custom `_TitleBar` widget starts a window drag on **MouseMove after a 5 px threshold** (not on MousePress — this preserves double-click detection). The drag itself uses Qt's `QWindow.startSystemMove()`, which internally calls `DefWindowProc(WM_SYSCOMMAND, SC_MOVE | HTCAPTION)` — Aero Snap is triggered automatically. Button widgets (menu items, window controls) are excluded from drag detection.
+A Qt `mousePressEvent` / `mouseMoveEvent` handler on the custom `_TitleBar` widget starts a window drag on **MouseMove after a 5 px threshold** (not on MousePress — this preserves double-click detection). Button widgets (window controls) are excluded from drag detection.
 
 ### Titlebar architecture
 
-The custom titlebar is set via `QMainWindow.setMenuWidget()`, replacing the menubar area entirely. Before replacement, all `QMenu` objects are extracted from the original menubar and migrated into a real `QMenuBar` widget inside the titlebar. This preserves all native menubar behaviour (Alt+letter shortcuts, hover-to-switch, keyboard navigation).
+The custom titlebar is set as a **TopLeftCorner widget** of the original (cleared) QMenuBar, with a Resize event filter forcing it to full menubar width. Before clearing, all QMenu objects are extracted and migrated into a real `QMenuBar` widget inside the titlebar — preserving Alt+letter shortcuts, hover-to-switch, and keyboard navigation.
 
-Sections are rendered by `TITLE_LAYOUT` (hardcoded for now):
-
-| Section | Widget | Notes |
-|---------|--------|-------|
-| `CurrentFileName` | `QLabel` | Polls `Krita.instance().activeDocument().fileName()` |
-| `OriginalMenuBar` | `QMenuBar` | Real QMenuBar hosting the original QMenu objects |
-| `Spacer` | `QWidget` | `QSizePolicy.Expanding` — pushes left/right apart |
-| `WindowControl` | `QWidget` | Minimise / Maximise / Close buttons |
+Components communicate with the titlebar via a shared `SignalBus` (palette, window state, teardown).
 
 ### Krita-specific caveats
 
-Krita's Python API objects (`Window`, `View`, `Document`, etc.) are **ephemeral thin wrappers** — they can be garbage-collected at any time. Never capture their references in signal callbacks or asynchronous code. Instead, cache stable underlying Qt object identifiers (like `qwin.objectName()`) and look up fresh wrappers at call time via `Krita.instance().windows()`.
+Krita's Python API objects (`Window`, `View`, `Document`, etc.) are **ephemeral thin wrappers** — they can be garbage-collected at any time. Never capture their references in signal callbacks or asynchronous code. Menubar mutations are deferred via `QTimer.singleShot(0)` to avoid segfaults.
 
 ### File structure
 
 ```
 frameless/
-├── compact_titlebar.desktop              # Krita plugin descriptor
+├── frameless.desktop                     # Krita plugin descriptor
 ├── frameless/
 │   ├── __init__.py                       # Python package entry
-│   ├── CompactTitlebarExtension.py       # main logic (heavily commented)
+│   ├── FramelessExtension.py             # main logic (Win32/DWM + titlebar + entry point)
+│   ├── config.json                       # layout configuration
+│   ├── components/
+│   │   ├── __init__.py                   # component registry + config loader
+│   │   ├── filename.py                   # CurrentFileName
+│   │   ├── menubar.py                    # OriginalMenuBar
+│   │   ├── spacer.py                     # Spacer
+│   │   └── window_control.py             # WindowControl
 │   ├── krita.pyi                         # Krita Python API type stubs
 │   └── Manual.html                       # Krita plugin help page
 ├── README.md                              # this file (English)

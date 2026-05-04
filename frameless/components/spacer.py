@@ -11,7 +11,7 @@ class _SpacerSection(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
 
-def create(window, bar_h: int, config: dict):
+def create(window, bar_h: int, config: dict, ctx):
     """Factory: Spacer component.
 
     config keys (all optional):
