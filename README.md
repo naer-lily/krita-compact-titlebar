@@ -4,7 +4,9 @@ Vibe-coded with deepseek-v4-pro.
 
 > [中文版](README_cn.md)
 
-A Krita plugin that replaces the native Windows titlebar with a compact, configurable custom titlebar — Krita's original menus are migrated into a real `QMenuBar` widget inside the custom bar, and window control buttons (minimise / maximise / close) sit on the far right. Empty space in the titlebar can be dragged to move the window, or double-clicked to toggle maximise.
+**Not just frameless — the titlebar is fully customizable.** Remove the native Windows titlebar and build your own compact header with any combination of components: document name, menus, spacers, brush size slider, window controls — or your own custom widgets. Drag empty space to move the window, double-click to toggle maximise.
+
+Layout is driven by a simple `config.json` file. Components are modular — drop a new `.py` file into `components/` and register it to add your own.
 
 **Windows 10 / 11 only.** Other operating systems are unaffected (the plugin silently skips non-Windows messages at load time).
 
