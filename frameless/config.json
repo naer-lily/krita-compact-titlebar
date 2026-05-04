@@ -1,0 +1,25 @@
+{
+    "layout": [
+        {
+            "name": "CurrentFileName",
+            "config": {
+                "poll_ms": 500
+            }
+        },
+        {
+            "name": "OriginalMenuBar",
+            "config": {}
+        },
+        {
+            "name": "Spacer",
+            "config": {}
+        },
+        {
+            "name": "WindowControl",
+            "config": {
+                "button_width": 60,
+                "close_hover_bg": "#E81123"
+            }
+        }
+    ]
+}
