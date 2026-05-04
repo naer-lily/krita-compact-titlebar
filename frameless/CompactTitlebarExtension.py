@@ -2,9 +2,11 @@
 Frameless — Krita Plugin  (Windows 10+ only)
 ==============================================
 
-Replaces the native Windows titlebar with a compact header:
-the menu bar itself serves as the window's drag handle and carries
-minimise / maximise / close buttons on its right side.
+Replaces the native Windows titlebar with a compact, configurable
+custom titlebar that sits in the menu bar area.  The original
+menubar menus are migrated into a real QMenuBar widget placed
+inside the custom titlebar, so keyboard shortcuts (Alt+letter),
+hover-to-switch, and keyboard navigation all work natively.
 
 How it works (high level)
 -------------------------
@@ -13,10 +15,14 @@ How it works (high level)
    resizing) and Aero Snap still works.
 2. DWM frame extension — tells the Desktop Window Manager "we're doing
    custom chrome" so it renders drop shadows.
-3. Three event listeners / filters:
-   - Native event filter   → WM_NCCALCSIZE, WM_GETMINMAXINFO, WM_NCHITTEST
-   - Menubar event filter  → drag + double-click on empty menubar space
-   - Window-state filter   → keep the maximise button icon in sync
+3. A custom _TitleBar widget (set via QMainWindow.setMenuWidget)
+   replaces the menubar area.  It contains:
+   - CurrentFileName  — QLabel polling Krita.instance().activeDocument()
+   - OriginalMenuBar  — a real QMenuBar with the original QMenu objects
+   - Spacer           — expanding empty space
+   - WindowControl    — minimise / maximise / close buttons
+4. Dragging on non-button areas of the _TitleBar moves the window;
+   double-click toggles maximise.
 
 Why not Qt.FramelessWindowHint?
 -------------------------------
@@ -33,14 +39,19 @@ from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
-from typing import Dict
+from functools import partial
+from typing import Dict, List
 
 from krita import *
 from PyQt5.QtCore import (
     Qt, QEvent, QObject, QAbstractNativeEventFilter, QCoreApplication,
+    QTimer, QSize,
 )
-from PyQt5.QtGui import QMouseEvent
-from PyQt5.QtWidgets import QToolButton, QWidget, QHBoxLayout, QMainWindow
+from PyQt5.QtGui import QMouseEvent, QPalette
+from PyQt5.QtWidgets import (
+    QToolButton, QWidget, QHBoxLayout, QMainWindow, QLabel,
+    QMenuBar, QMenu, QSizePolicy, QApplication,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -57,8 +68,20 @@ DRAG_THRESHOLD_PX     = 5       # pixels of movement before drag starts
 # DWM
 DWM_TOP_MARGIN        = 1       # px extended into client area (triggers shadows)
 
-# Corner widget polling
-CORNER_POLL_MS        = 100     # milliseconds between corner widget checks
+# Corner widget polling (Krita MDI subwindow may steal it)
+CORNER_POLL_MS        = 100     # ms between corner widget checks
+
+# Titlebar layout — hardcoded section order (config UI in future release)
+TITLE_LAYOUT = [
+    'CurrentFileName',
+    'Spacer',
+    'OriginalMenuBar',
+    'Spacer',
+    'WindowControl',
+]
+
+# File name polling
+FILENAME_POLL_MS      = 500     # ms between filename checks
 
 # Window control buttons — visual
 BTN_WIDTH             = 60      # px
@@ -67,6 +90,9 @@ BTN_TEXT_MAXIMISE     = "\u25A1"  # □
 BTN_TEXT_RESTORE      = "\u2750"  # ❐
 BTN_TEXT_CLOSE        = "\u2715"  # ✕
 CLOSE_HOVER_BG        = "#E81123" # Windows-native red
+
+# Titlebar left padding (before first widget)
+TITLEBAR_PAD_LEFT     = 4       # px
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -260,101 +286,12 @@ def _make_frameless(qwin: QMainWindow):
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  MENUBAR INTERACTION                                                        ║
-# ║  Qt event filters installed on the QMenuBar: drag, double-click,            ║
-# ║  and window-state tracking for the maximise button icon.                    ║
+# ║  CUSTOM TITLEBAR                                                            ║
+# ║  A QWidget set via QMainWindow.setMenuWidget() that replaces the menubar    ║
+# ║  area.  Its QHBoxLayout holds configurable sections.                        ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
-class _MenubarEventFilter(QObject):
-    """Installed on QMenuBar.  Intercepts mouse events on *empty* menubar
-    space (where no QAction sits).
-
-    - Drag:           starts on MouseMove after a 5px threshold (not on
-                      press — this preserves double-click detection).
-    - Double-click:   toggles maximise / restore.
-    - Menu clicks:    pass through normally (checked via actionAt()).
-    """
-
-    DRAG_THRESHOLD = DRAG_THRESHOLD_PX
-
-    def __init__(self, qwin: QMainWindow):
-        super().__init__()
-        self._qwin      = qwin
-        self._press_pos = None      # global position of initial mouse press
-
-    def eventFilter(self, obj: QObject, event: QEvent):
-        etype = event.type()
-
-        # Mouse press on empty space → record position for drag detection
-        if etype == QEvent.MouseButtonPress:
-            if obj.actionAt(event.pos()) is None:
-                self._press_pos = event.globalPos()
-                return False    # pass through for double-click detection
-            return super().eventFilter(obj, event)
-
-        # Mouse move: if threshold exceeded → start native window move
-        if etype == QEvent.MouseMove:
-            if self._press_pos is not None:
-                delta = event.globalPos() - self._press_pos
-                if delta.manhattanLength() >= self.DRAG_THRESHOLD:
-                    self._press_pos = None
-                    # Cancel the menubar's pending press so the real mouse-up
-                    # after drag doesn't trigger a menu on whatever is under
-                    # the cursor (which may have shifted after un-maximise).
-                    QCoreApplication.sendEvent(obj, QMouseEvent(
-                        QEvent.MouseButtonRelease,
-                        event.localPos(), event.screenPos(),
-                        Qt.LeftButton, Qt.NoButton, Qt.NoModifier))
-                    # Qt's startSystemMove → Win32 DefWindowProc(SC_MOVE|HTCAPTION)
-                    # → Aero Snap works natively.
-                    handle = self._qwin.windowHandle()
-                    if handle is not None and hasattr(handle, 'startSystemMove'):
-                        handle.startSystemMove()
-                    return True
-            return super().eventFilter(obj, event)
-
-        # Mouse release → clear drag tracking
-        if etype == QEvent.MouseButtonRelease:
-            self._press_pos = None
-            return super().eventFilter(obj, event)
-
-        # Double-click on empty space → toggle maximise
-        if etype == QEvent.MouseButtonDblClick:
-            self._press_pos = None
-            if obj.actionAt(event.pos()) is None:
-                if self._qwin.isMaximized():
-                    self._qwin.showNormal()
-                else:
-                    self._qwin.showMaximized()
-                return True
-
-        return super().eventFilter(obj, event)
-
-
-class _WindowStateFilter(QObject):
-    """Detects QEvent.WindowStateChange and calls a callback so the maximise
-    button icon stays in sync with the actual window state (e.g. after
-    Win+Up, double-click on the menubar, or Aero Snap).
-
-    QMainWindow doesn't emit a "windowStateChanged" signal, so we intercept
-    the raw Qt event instead.
-    """
-
-    def __init__(self, on_state_changed):
-        super().__init__()
-        self._cb = on_state_changed
-
-    def eventFilter(self, obj: QObject, event: QEvent):
-        if event.type() == QEvent.WindowStateChange:
-            self._cb()
-        return super().eventFilter(obj, event)
-
-
-# ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  WINDOW CONTROL BUTTONS                                                     ║
-# ║  The minimise / maximise / close buttons embedded in the menu bar.          ║
-# ║  Styling adapts to Krita's active theme via palette inheritance.            ║
-# ╚══════════════════════════════════════════════════════════════════════════════╝
+# --- Stylesheet for window control buttons -----------------------------------
 
 _BTN_STYLESHEET = f"""
     QToolButton {{
@@ -373,82 +310,335 @@ _BTN_STYLESHEET = f"""
     }}
 """
 
+_TITLEBAR_STYLESHEET = """
+    QWidget#frameless-titlebar {
+        background: palette(window);
+    }
+"""
 
-def _make_window_controls(qwin: QMainWindow):
-    """Create the minimise / maximise / close button widget, plus a
-    window-state filter that keeps the maximise icon in sync.
 
-    All dependencies (menubar, objectName) are derived from qwin.
-    Returns (corner_widget, state_filter) — both need cleanup on teardown.
+# --- Section: CurrentFileName -------------------------------------------------
+
+class _FileNameSection(QLabel):
+    """Polls Krita for the active document name every FILENAME_POLL_MS ms."""
+
+    def __init__(self, bar_height: int, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(bar_height)
+        self.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self._refresh()
+
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._refresh)
+        self._timer.start(FILENAME_POLL_MS)
+
+    def _refresh(self):
+        """Read current document name from Krita."""
+        try:
+            doc = Krita.instance().activeDocument()
+            if doc is not None:
+                fname = doc.fileName()
+                self.setText(fname if fname else "")
+            else:
+                self.setText("")
+        except Exception:
+            self.setText("")
+
+    def stop(self):
+        """Stop the poll timer."""
+        self._timer.stop()
+
+
+# --- Section: OriginalMenuBar -------------------------------------------------
+
+class _MenuBarSection(QMenuBar):
+    """A real QMenuBar that hosts the original QMenu objects from Krita's
+    native menubar.
+
+    SetSizePolicy(Maximum, Fixed) ensures it only takes as much width as
+    its menus need, leaving the rest for the Spacer.
     """
-    menubar = qwin.menuBar()
-    obj_name = qwin.objectName()
-    bar_h = menubar.height()
-    btn_w = BTN_WIDTH
 
-    w = QWidget()
-    w.setObjectName("frameless-controls")
-    w.setFixedHeight(bar_h)
-    lay = QHBoxLayout(w)
-    lay.setContentsMargins(0, 0, 0, 0)
-    lay.setSpacing(0)
+    def __init__(self, menus: List[QMenu], bar_height: int, parent=None):
+        super().__init__(parent)
+        self.setNativeMenuBar(False)
+        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self.setFixedHeight(bar_height)
 
-    # -- Minimise ----------------------------------------------------------
-    b_min = QToolButton(w)
-    b_min.setText(BTN_TEXT_MINIMISE)
-    b_min.setObjectName("titlebar-minimize")
-    b_min.setFixedSize(btn_w, bar_h)
-    b_min.setToolTip("Minimise")
-    b_min.setStyleSheet(_BTN_STYLESHEET)
-    b_min.clicked.connect(qwin.showMinimized)
+        for menu in menus:
+            # Reparent the QMenu so it stays alive after the original
+            # menubar is replaced via setMenuWidget().
+            # menu.setParent(self)
+            self.addMenu(menu)
 
-    # -- Maximise / Restore -------------------------------------------------
-    b_max = QToolButton(w)
-    b_max.setObjectName("titlebar-maximize")
-    b_max.setFixedSize(btn_w, bar_h)
-    b_max.setStyleSheet(_BTN_STYLESHEET)
 
-    def _toggle():
-        if qwin.isMaximized():
-            qwin.showNormal()
+# --- Section: Spacer ----------------------------------------------------------
+
+class _SpacerSection(QWidget):
+    """Horizontally-expanding empty space between left and right sections."""
+
+    def __init__(self, bar_height: int, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(bar_height)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+
+# --- Section: WindowControl ---------------------------------------------------
+
+class _WindowControlSection(QWidget):
+    """Minimise / Maximise / Close buttons.
+
+    Keeps the maximise icon in sync with the window state.
+    """
+
+    def __init__(self, qwin: QMainWindow, obj_name: str,
+                 bar_height: int, parent=None):
+        super().__init__(parent)
+        self._qwin = qwin
+        self._obj_name = obj_name
+        self.setFixedHeight(bar_height)
+
+        btn_w = BTN_WIDTH
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+
+        # -- Minimise ----------------------------------------------------
+        self._b_min = QToolButton(self)
+        self._b_min.setText(BTN_TEXT_MINIMISE)
+        self._b_min.setObjectName("titlebar-minimize")
+        self._b_min.setFixedSize(btn_w, bar_height)
+        self._b_min.setToolTip("Minimise")
+        self._b_min.setStyleSheet(_BTN_STYLESHEET)
+        self._b_min.clicked.connect(qwin.showMinimized)
+
+        # -- Maximise / Restore -------------------------------------------
+        self._b_max = QToolButton(self)
+        self._b_max.setObjectName("titlebar-maximize")
+        self._b_max.setFixedSize(btn_w, bar_height)
+        self._b_max.setStyleSheet(_BTN_STYLESHEET)
+
+        def _toggle():
+            if qwin.isMaximized():
+                qwin.showNormal()
+            else:
+                qwin.showMaximized()
+        self._b_max.clicked.connect(_toggle)
+
+        # -- Close --------------------------------------------------------
+        def _on_close():
+            for kw in Krita.instance().windows():
+                if kw.qwindow().objectName() == obj_name:
+                    kw.qwindow().close()
+                    return
+            qwin.close()
+
+        self._b_close = QToolButton(self)
+        self._b_close.setText(BTN_TEXT_CLOSE)
+        self._b_close.setObjectName("titlebar-close")
+        self._b_close.setFixedSize(btn_w, bar_height)
+        self._b_close.setToolTip("Close")
+        self._b_close.setStyleSheet(_BTN_STYLESHEET)
+        self._b_close.clicked.connect(_on_close)
+
+        lay.addWidget(self._b_min)
+        lay.addWidget(self._b_max)
+        lay.addWidget(self._b_close)
+
+        self.update_maximize_icon()
+
+    def update_maximize_icon(self):
+        """Sync button text/tooltip with current window state."""
+        if self._qwin.isMaximized():
+            self._b_max.setText(BTN_TEXT_RESTORE)
+            self._b_max.setToolTip("Restore")
         else:
-            qwin.showMaximized()
-    b_max.clicked.connect(_toggle)
+            self._b_max.setText(BTN_TEXT_MAXIMISE)
+            self._b_max.setToolTip("Maximize")
 
-    # -- Close --------------------------------------------------------------
-    def _on_close():
-        for kw in Krita.instance().windows():
-            if kw.qwindow().objectName() == obj_name:
-                kw.qwindow().close()
+    def apply_palette(self, pal: QPalette):
+        """Propagate a palette to all child buttons."""
+        self.setPalette(pal)
+        for btn in self.findChildren(QToolButton):
+            btn.setPalette(pal)
+
+
+# --- Main: TitleBar (QWidget) -------------------------------------------------
+
+class _TitleBar(QWidget):
+    """Custom titlebar that replaces the QMainWindow menubar area.
+
+    Layout is driven by title_layout.  Handles drag-to-move and
+    double-click-to-maximise on non-interactive areas.
+    """
+
+    DRAG_THRESHOLD = DRAG_THRESHOLD_PX
+
+    def __init__(self, qwin: QMainWindow, obj_name: str,
+                 original_menubar: QMenuBar,
+                 menus: List[QMenu],
+                 title_layout: List[str],
+                 parent=None):
+        super().__init__(parent)
+        self._qwin = qwin
+        self._obj_name = obj_name
+        self._original_menubar = original_menubar
+        self._title_layout = title_layout
+        self._press_pos = None
+        self._filename = None       # _FileNameSection (for teardown)
+        self._wc = None             # _WindowControlSection (for palette/teardown)
+
+        bar_h = original_menubar.height()
+
+        self.setObjectName("frameless-titlebar")
+        self.setFixedHeight(bar_h)
+        self.setStyleSheet(_TITLEBAR_STYLESHEET)
+
+        # ---- Build the layout from title_layout -------------------------
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(TITLEBAR_PAD_LEFT, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self._sections: Dict[str, QWidget] = {}
+
+        for section_name in title_layout:
+            if section_name == 'CurrentFileName':
+                self._filename = _FileNameSection(bar_h, self)
+                layout.addWidget(self._filename)
+                self._sections[section_name] = self._filename
+            elif section_name == 'OriginalMenuBar':
+                w = _MenuBarSection(menus, bar_h, self)
+                layout.addWidget(w)
+                self._sections[section_name] = w
+            elif section_name == 'Spacer':
+                w = _SpacerSection(bar_h, self)
+                layout.addWidget(w)
+                self._sections[section_name] = w
+            elif section_name == 'WindowControl':
+                self._wc = _WindowControlSection(qwin, obj_name, bar_h, self)
+                layout.addWidget(self._wc)
+                self._sections[section_name] = self._wc
+
+        # ---- Window-state tracking for maximise icon --------------------
+        self._state_filter = _WindowStateFilter(self._on_state_changed)
+        qwin.installEventFilter(self._state_filter)
+
+        # ---- Initial palette from the original menubar ------------------
+        self._apply_menubar_palette()
+
+        # ---- Theme change → re-apply palette ----------------------------
+        QApplication.instance().paletteChanged.connect(
+            self._apply_menubar_palette)
+
+    # -- Palette ----------------------------------------------------------
+
+    def _apply_menubar_palette(self):
+        """Read the palette from the saved original menubar
+        and propagate to sections that need it."""
+        try:
+            pal = self._original_menubar.palette()
+            self.setPalette(pal)
+            if self._wc is not None:
+                self._wc.apply_palette(pal)
+        except Exception:
+            pass
+
+    # -- Drag & double-click ----------------------------------------------
+
+    def _is_interactive_child(self, pos):
+        """Return True if the position is over a button that should
+        consume mouse events (not start a drag)."""
+        child = self.childAt(pos)
+        if child is None:
+            return False
+        return isinstance(child, QToolButton)
+
+    def mousePressEvent(self, event: QMouseEvent):
+        if event.button() == Qt.LeftButton:
+            if not self._is_interactive_child(event.pos()):
+                self._press_pos = event.globalPos()
+                event.ignore()
                 return
-        qwin.close()
+        super().mousePressEvent(event)
 
-    b_close = QToolButton(w)
-    b_close.setText(BTN_TEXT_CLOSE)
-    b_close.setObjectName("titlebar-close")
-    b_close.setFixedSize(btn_w, bar_h)
-    b_close.setToolTip("Close")
-    b_close.setStyleSheet(_BTN_STYLESHEET)
-    b_close.clicked.connect(_on_close)
+    def mouseMoveEvent(self, event: QMouseEvent):
+        if self._press_pos is not None:
+            delta = event.globalPos() - self._press_pos
+            if delta.manhattanLength() >= self.DRAG_THRESHOLD:
+                self._press_pos = None
+                handle = self._qwin.windowHandle()
+                if handle is not None and hasattr(handle, 'startSystemMove'):
+                    handle.startSystemMove()
+                return
+        super().mouseMoveEvent(event)
 
-    lay.addWidget(b_min)
-    lay.addWidget(b_max)
-    lay.addWidget(b_close)
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        self._press_pos = None
+        super().mouseReleaseEvent(event)
 
-    # -- Window-state filter: keep maximise icon in sync -------------------
-    def _update_max():
-        if qwin.isMaximized():
-            b_max.setText(BTN_TEXT_RESTORE)
-            b_max.setToolTip("Restore")
-        else:
-            b_max.setText(BTN_TEXT_MAXIMISE)
-            b_max.setToolTip("Maximize")
+    def mouseDoubleClickEvent(self, event: QMouseEvent):
+        if event.button() == Qt.LeftButton:
+            if not self._is_interactive_child(event.pos()):
+                self._press_pos = None
+                if self._qwin.isMaximized():
+                    self._qwin.showNormal()
+                else:
+                    self._qwin.showMaximized()
+                return
+        super().mouseDoubleClickEvent(event)
 
-    state_filter = _WindowStateFilter(_update_max)
-    _update_max()
-    qwin.installEventFilter(state_filter)
+    # -- Window state callback --------------------------------------------
 
-    return w, state_filter
+    def _on_state_changed(self):
+        if self._wc is not None:
+            self._wc.update_maximize_icon()
+
+    # -- Cleanup ----------------------------------------------------------
+
+    def teardown(self):
+        """Stop timers, disconnect signals, remove event filters."""
+        if self._filename is not None:
+            self._filename.stop()
+        self._qwin.removeEventFilter(self._state_filter)
+        try:
+            QApplication.instance().paletteChanged.disconnect(
+                self._apply_menubar_palette)
+        except Exception:
+            pass
+
+
+# --- Resize filter for TopLeftCorner full-width trick -----------------------
+
+class _CornerResizeFilter(QObject):
+    """Force the TopLeftCorner widget to match the menubar width on resize."""
+
+    def __init__(self, menubar: QMenuBar, titlebar: QWidget):
+        super().__init__()
+        self._menubar = menubar
+        self._titlebar = titlebar
+
+    def eventFilter(self, obj: QObject, event: QEvent):
+        if obj is self._menubar and event.type() == QEvent.Resize:
+            print('!!!', self._menubar.width())
+            self._titlebar.setFixedWidth(self._menubar.width())
+        return False
+
+
+# --- Window-state event filter ------------------------------------------------
+
+class _WindowStateFilter(QObject):
+    """Installed on QMainWindow to detect WindowStateChange events."""
+
+    def __init__(self, callback):
+        super().__init__()
+        self._cb = callback
+
+    def eventFilter(self, obj: QObject, event: QEvent):
+        if event.type() == QEvent.WindowStateChange:
+            self._cb()
+        return super().eventFilter(obj, event)
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -468,69 +658,92 @@ class CompactTitlebarExtension(Extension):
         pass
 
     def createActions(self, window: Window):
-        qwin    = window.qwindow()
-        menubar = qwin.menuBar()
-        if menubar is None:
-            return
+        win_obj_name = window.objectName()
 
-        obj_name = qwin.objectName()
-        if obj_name in self._managed:
-            self._teardown_window(obj_name)
+        # Deferred via QTimer.singleShot — synchronous menubar mutation
+        # can cause a segfault in Krita's event loop.
+        @partial(QTimer.singleShot, 0)
+        def _():
+            # Re-acquire the window wrapper (Krita wrappers are ephemeral)
+            for w in Krita.instance().windows():
+                if w.objectName() == win_obj_name:
+                    window_ref = w
+                    break
+            else:
+                return
 
-        # ---- Window controls: buttons + state filter (all in one) ---------
-        corner, state_filter = _make_window_controls(qwin)
-        corner.setPalette(menubar.palette())
-        menubar.setCornerWidget(corner, Qt.TopRightCorner)
+            qwin = window_ref.qwindow()
+            original_menubar = qwin.menuBar()
+            if original_menubar is None:
+                return
 
-        # ---- Polling guard: Krita MDI subwindow max replaces the corner --
-        from PyQt5.QtCore import QTimer
-        poll_timer = QTimer(window.qwindow())
-        def _poll_corner():
-            cur = menubar.cornerWidget(Qt.TopRightCorner)
-            if cur is not corner:
-                if cur:
-                    cur.hide()
-                menubar.setCornerWidget(corner, Qt.TopRightCorner)
-                corner.show()
-        poll_timer.timeout.connect(_poll_corner)
-        poll_timer.start(CORNER_POLL_MS)
+            obj_name = qwin.objectName()
+            if obj_name in self._managed:
+                self._teardown_window(obj_name)
 
-        # ---- Menubar interaction: drag + double-click --------------------
-        menubar_filter = _MenubarEventFilter(qwin)
-        menubar.installEventFilter(menubar_filter)
+            # ---- Save menus, then clear the original menubar ------------
+            saved_menus: List[QMenu] = []
+            for action in original_menubar.actions():
+                m = action.menu()
+                if m is not None:
+                    saved_menus.append(m)
+            original_menubar.clear()
 
-        # ---- Theme change: sync button palette from menubar --------------
-        from PyQt5.QtWidgets import QApplication
-        def _on_theme_changed():
-            pal = menubar.palette()
-            corner.setPalette(pal)
-            for btn in corner.findChildren(QToolButton):
-                btn.setPalette(pal)
-        QApplication.instance().paletteChanged.connect(_on_theme_changed)
+            # ---- Build the custom titlebar -------------------------------
+            titlebar = _TitleBar(qwin, obj_name, original_menubar,
+                                 saved_menus, TITLE_LAYOUT)
 
-        # ---- Frameless window --------------------------------------------
-        native_filter = _make_frameless(qwin)
+            # ---- Set as TopLeftCorner + Resize filter → full width -------
+            if old_one := original_menubar.cornerWidget(Qt.TopLeftCorner):
+                old_one.hide()
+            original_menubar.setCornerWidget(titlebar, Qt.TopLeftCorner)
+            titlebar.show()
+            
+            resize_filter = _CornerResizeFilter(original_menubar, titlebar)
+            original_menubar.installEventFilter(resize_filter)
 
-        # ---- Bookkeeping -------------------------------------------------
-        self._managed[obj_name] = {
-            'corner':         corner,
-            'menubar_filter': menubar_filter,
-            'state_filter':   state_filter,
-            'native_filter':  native_filter,
-            'poll_timer':     poll_timer,
-            'menubar':        menubar,
-            'qwin':           qwin,
-        }
-        window.windowClosed.connect(
-            lambda on=obj_name: self._teardown_window(on))
+            # ---- Polling guard: Krita MDI subwindow may steal corner ----
+            poll_timer = QTimer(qwin)
+            def _poll_corner():
+                cur = original_menubar.cornerWidget(Qt.TopLeftCorner)
+                if cur is not titlebar:
+                    if cur is not None:
+                        cur.hide()
+                    original_menubar.setCornerWidget(titlebar, Qt.TopLeftCorner)
+                    titlebar.show()
+                
+                # then, hide top right corner
+                if tr := original_menubar.cornerWidget(Qt.TopRightCorner):
+                    tr.hide()
+            poll_timer.timeout.connect(_poll_corner)
+            poll_timer.start(CORNER_POLL_MS)
+
+            # ---- Frameless window ----------------------------------------
+            native_filter = _make_frameless(qwin)
+
+            # ---- Bookkeeping ---------------------------------------------
+            self._managed[obj_name] = {
+                'titlebar':        titlebar,
+                'native_filter':   native_filter,
+                'qwin':            qwin,
+                'menubar':         original_menubar,
+                'resize_filter':   resize_filter,
+                'poll_timer':      poll_timer,
+            }
+            window_ref.windowClosed.connect(
+                lambda on=obj_name: self._teardown_window(on))
 
     def _teardown_window(self, obj_name: str):
         if obj_name not in self._managed:
             return
         d = self._managed.pop(obj_name)
+
+        # Remove Resize filter and clear corner widget
+        d['menubar'].removeEventFilter(d['resize_filter'])
+        d['menubar'].setCornerWidget(None, Qt.TopLeftCorner)
         d['poll_timer'].stop()
-        d['menubar'].removeEventFilter(d['menubar_filter'])
-        d['qwin'].removeEventFilter(d['state_filter'])
+
+        d['titlebar'].teardown()
         if d['native_filter'] is not None:
             QCoreApplication.instance().removeNativeEventFilter(
                 d['native_filter'])

@@ -4,7 +4,7 @@ Vibe-coded with deepseek-v4-pro.
 
 > [中文版](README_cn.md)
 
-A Krita plugin that replaces the native Windows titlebar with a compact header — window control buttons (minimise / maximise / close) are embedded on the right side of the menu bar, and empty menubar space can be dragged to move the window or double-clicked to toggle maximise.
+A Krita plugin that replaces the native Windows titlebar with a compact, configurable custom titlebar — Krita's original menus are migrated into a real `QMenuBar` widget inside the custom bar, and window control buttons (minimise / maximise / close) sit on the far right. Empty space in the titlebar can be dragged to move the window, or double-clicked to toggle maximise.
 
 **Windows 10 / 11 only.** Other operating systems are unaffected (the plugin silently skips non-Windows messages at load time).
 
@@ -12,7 +12,7 @@ A Krita plugin that replaces the native Windows titlebar with a compact header �
 
 ## Installation
 
-refer <https://github.com/naer-lily/krita-shortcut-fix>. **A manuall restart is required**.
+refer <https://github.com/naer-lily/krita-shortcut-fix>. **A manual restart is required**.
 
 ## Visual comparison
 
@@ -28,15 +28,17 @@ Native Krita:
 
 Frameless:
 ┌─────────────────────────────────────────────┐
-│  File  Edit  View  ...          ─  □  ✕  │  ← menu bar == titlebar
+│  doc.kra  File  Edit  View  ...  ─  □  ✕  │  ← custom titlebar
 ├─────────────────────────────────────────────┤
 │  canvas                                      │
 └─────────────────────────────────────────────┘
 ```
 
-- Three window control buttons appear on the right of the menu bar
-- Empty menubar space (where no menu action sits) can be dragged to move the window; Aero Snap (half-screen / quarter-screen) works when dragged to a screen edge
-- Double-click empty menubar space to toggle maximise / restore
+- Current document name shown on the left
+- Menus (File, Edit, …) sit inside a real `QMenuBar` — Alt+letter shortcuts, hover-to-switch, and keyboard navigation all work natively
+- Empty titlebar space can be dragged to move the window; Aero Snap (half-screen / quarter-screen) works when dragged to a screen edge
+- Double-click empty titlebar space to toggle maximise / restore
+- Layout is configurable (currently hardcoded; config UI planned)
 
 ## Technical overview
 
@@ -58,7 +60,20 @@ Our implementation is equivalent to how VS Code / Chrome / Electron handle custo
 
 ### Drag handling
 
-A Qt event filter is installed on the menu bar. Window drag starts on **MouseMove after a 5 px threshold** (not on MousePress — this preserves double-click detection). The drag itself uses Qt's `QWindow.startSystemMove()`, which internally calls `DefWindowProc(WM_SYSCOMMAND, SC_MOVE | HTCAPTION)` — Aero Snap is triggered automatically.
+A Qt `mousePressEvent` / `mouseMoveEvent` handler on the custom `_TitleBar` widget starts a window drag on **MouseMove after a 5 px threshold** (not on MousePress — this preserves double-click detection). The drag itself uses Qt's `QWindow.startSystemMove()`, which internally calls `DefWindowProc(WM_SYSCOMMAND, SC_MOVE | HTCAPTION)` — Aero Snap is triggered automatically. Button widgets (menu items, window controls) are excluded from drag detection.
+
+### Titlebar architecture
+
+The custom titlebar is set via `QMainWindow.setMenuWidget()`, replacing the menubar area entirely. Before replacement, all `QMenu` objects are extracted from the original menubar and migrated into a real `QMenuBar` widget inside the titlebar. This preserves all native menubar behaviour (Alt+letter shortcuts, hover-to-switch, keyboard navigation).
+
+Sections are rendered by `TITLE_LAYOUT` (hardcoded for now):
+
+| Section | Widget | Notes |
+|---------|--------|-------|
+| `CurrentFileName` | `QLabel` | Polls `Krita.instance().activeDocument().fileName()` |
+| `OriginalMenuBar` | `QMenuBar` | Real QMenuBar hosting the original QMenu objects |
+| `Spacer` | `QWidget` | `QSizePolicy.Expanding` — pushes left/right apart |
+| `WindowControl` | `QWidget` | Minimise / Maximise / Close buttons |
 
 ### Krita-specific caveats
 
