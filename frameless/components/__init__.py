@@ -94,9 +94,10 @@ def _validate_layout(layout: list):
 # ---------------------------------------------------------------------------
 _DEFAULT_CONFIG: dict = {
     "layout": [
+        {"name": "Separator",       "config": {"width": 4}},
+        {"name": "OriginalMenuBar", "config": {"compact": True}},
         {"name": "CurrentFileName", "config": {"poll_ms": 500}},
-        {"name": "Separator",       "config": {"width": 8}},
-        {"name": "OriginalMenuBar", "config": {}},
+        {"name": "Spacer",          "config": {"scale": 1}},
         {"name": "CustomToolBar",   "config": {"toolbar_name": "customToolBar2"}},
         {"name": "Spacer",          "config": {"scale": 1}},
         {"name": "WindowControl",   "config": {"button_width": 60, "close_hover_bg": "#E81123"}},

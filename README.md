@@ -4,7 +4,7 @@ Vibe-coded with deepseek-v4-pro.
 
 > [中文版](README_cn.md)
 
-**Not just frameless — the titlebar is fully customizable.** Remove the native Windows titlebar and build your own compact header with any combination of components: document name, menus, spacers, brush size slider, window controls — or your own custom widgets. Drag empty space to move the window, double-click to toggle maximise.
+**Not just frameless — the titlebar is fully customizable, and you can embed Krita's own toolbars directly into it.** Remove the native Windows titlebar, then build your own compact header with any combination of components: document name, menus, spacers, window controls, and even Krita's native QToolBars — all in one row. Drag empty space to move the window, double-click to toggle maximise.
 
 Layout is driven by a simple `config.json` file. On first run (or if the file is missing / corrupt), a template `config.json` is written to disk automatically — just edit it and restart Krita. Components are modular — drop a new `.py` file into `components/` and register it to add your own.
 
@@ -29,17 +29,19 @@ Native Krita:
 └─────────────────────────────────────────────┘
 
 Frameless:
-┌─────────────────────────────────────────────┐
-│  doc.kra  File  Edit  View  ...  ─  □  ✕  │  ← custom titlebar
-├─────────────────────────────────────────────┤
-│  canvas                                      │
-└─────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│  doc.kra  ☰  [brush size ████]  [tool buttons]  ─  □  ✕  │  ← custom titlebar
+├──────────────────────────────────────────────────┤
+│  canvas                                           │
+└──────────────────────────────────────────────────┘
 ```
 
 - Current document name shown on the left
-- Menus (File, Edit, …) sit inside a real `QMenuBar` — Alt+letter shortcuts, hover-to-switch, and keyboard navigation all work natively
+- Menus can be shown inline OR collapsed into a single icon button with dropdown — Alt+letter shortcuts preserved in both modes
+- **Krita's native toolbars can be embedded directly into the titlebar** via the `CustomToolBar` component — reclaim vertical screen space
 - Empty titlebar space can be dragged to move the window; Aero Snap (half-screen / quarter-screen) works when dragged to a screen edge
 - Double-click empty titlebar space to toggle maximise / restore
+- Titlebar height dynamically adapts to the tallest component (e.g. toolbar taller than menu)
 - Layout is configurable via `config.json` — reorder, remove, or add custom components
 
 ### Configuration
@@ -66,10 +68,10 @@ If the file is deleted or corrupted, a fresh template is written on next launch.
 | Component | Purpose | Config keys |
 |-----------|---------|-------------|
 | `CurrentFileName` | Shows the active document name | `poll_ms` (int, default 500) |
-| `OriginalMenuBar` | Migrated native QMenuBar | (none) |
+| `OriginalMenuBar` | Migrated native QMenuBar | `compact` (bool, default false) — single icon button with dropdown; `menu_label` (str) — button text override |
 | `Separator` | Fixed-width visual divider | `width` (int, px, default 8) |
 | `Spacer` | Expands to fill remaining space | `scale` (int, ≥1, default 1) — proportion relative to other spacers |
-| `CustomToolBar` | Hosts a named QToolBar below the titlebar | `toolbar_name` (str, default `"customToolBar2"`) |
+| `CustomToolBar` | **Embeds a Krita QToolBar inside the titlebar** | `toolbar_name` (str, default `"customToolBar2"`) — objectName of any Krita toolbar |
 | `WindowControl` | Minimize / Maximize / Close buttons | `button_width` (int, px, default 60), `close_hover_bg` (CSS color, default `"#E81123"`) |
 
 ## Technical overview
