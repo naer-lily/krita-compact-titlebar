@@ -21,7 +21,9 @@ from krita import Window
 
 from . import filename
 from . import menubar
+from . import separator
 from . import spacer
+from . import toolbar
 from . import window_control
 
 # ---------------------------------------------------------------------------
@@ -40,7 +42,9 @@ COMPONENT_REGISTRY: Dict[
     str, Callable[[Window, int, dict, _ComponentContext], QWidget]
 ] = {
     'CurrentFileName':  filename.create,
+    'CustomToolBar':    toolbar.create,
     'OriginalMenuBar':  menubar.create,
+    'Separator':        separator.create,
     'Spacer':           spacer.create,
     'WindowControl':    window_control.create,
 }
@@ -86,20 +90,56 @@ def _validate_layout(layout: list):
 
 
 # ---------------------------------------------------------------------------
+# Default / template config — written when config.json is missing or invalid
+# ---------------------------------------------------------------------------
+_DEFAULT_CONFIG: dict = {
+    "layout": [
+        {"name": "CurrentFileName", "config": {"poll_ms": 500}},
+        {"name": "OriginalMenuBar", "config": {}},
+        {"name": "Separator",       "config": {"width": 8}},
+        {"name": "Spacer",          "config": {"scale": 1}},
+        {"name": "CustomToolBar",   "config": {}},
+        {"name": "Separator",       "config": {"width": 8}},
+        {"name": "WindowControl",   "config": {"button_width": 60, "close_hover_bg": "#E81123"}},
+    ]
+}
+
+
+def _write_default_config():
+    path = _config_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(_DEFAULT_CONFIG, f, indent=4, ensure_ascii=False)
+    return path
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 def load_config() -> List[dict]:
     path = _config_path()
+
+    # -- file missing → write template -----------------------------------
     if not os.path.exists(path):
-        raise FileNotFoundError(f"config.json not found at {path}")
+        _write_default_config()
+        _validate_layout(_DEFAULT_CONFIG['layout'])
+        return _DEFAULT_CONFIG['layout']
 
-    with open(path, 'r', encoding='utf-8') as f:
-        raw = json.load(f)
+    # -- file exists → try to parse --------------------------------------
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
 
-    if not isinstance(raw, dict):
-        raise ValueError("config.json root must be a dict")
-    if 'layout' not in raw:
-        raise ValueError("config.json must have a 'layout' key")
+        if not isinstance(raw, dict):
+            raise ValueError("root must be a dict")
+        if 'layout' not in raw:
+            raise ValueError("missing 'layout' key")
 
-    _validate_layout(raw['layout'])
-    return raw['layout']
+        _validate_layout(raw['layout'])
+        return raw['layout']
+
+    except Exception:
+        # Corrupt or invalid → overwrite with template
+        _write_default_config()
+        _validate_layout(_DEFAULT_CONFIG['layout'])
+        return _DEFAULT_CONFIG['layout']

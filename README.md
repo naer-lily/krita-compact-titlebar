@@ -6,7 +6,7 @@ Vibe-coded with deepseek-v4-pro.
 
 **Not just frameless — the titlebar is fully customizable.** Remove the native Windows titlebar and build your own compact header with any combination of components: document name, menus, spacers, brush size slider, window controls — or your own custom widgets. Drag empty space to move the window, double-click to toggle maximise.
 
-Layout is driven by a simple `config.json` file. Components are modular — drop a new `.py` file into `components/` and register it to add your own.
+Layout is driven by a simple `config.json` file. On first run (or if the file is missing / corrupt), a template `config.json` is written to disk automatically — just edit it and restart Krita. Components are modular — drop a new `.py` file into `components/` and register it to add your own.
 
 **Windows 10 / 11 only.** Other operating systems are unaffected (the plugin silently skips non-Windows messages at load time).
 
@@ -44,20 +44,33 @@ Frameless:
 
 ### Configuration
 
-Edit `frameless/config.json` to customize the titlebar layout:
+Edit `frameless/config.json` to customize the titlebar layout.
+If the file is deleted or corrupted, a fresh template is written on next launch.
 
 ```json
 {
     "layout": [
         {"name": "CurrentFileName", "config": {"poll_ms": 500}},
         {"name": "OriginalMenuBar", "config": {}},
-        {"name": "Spacer",           "config": {}},
-        {"name": "WindowControl",   "config": {"button_width": 60}}
+        {"name": "Separator",       "config": {"width": 8}},
+        {"name": "Spacer",          "config": {"scale": 1}},
+        {"name": "CustomToolBar",   "config": {}},
+        {"name": "Separator",       "config": {"width": 8}},
+        {"name": "WindowControl",   "config": {"button_width": 60, "close_hover_bg": "#E81123"}}
     ]
 }
 ```
 
-Components are in `frameless/components/` — each exposes a `create(window, bar_h, config)` factory. To add your own, drop a `.py` file in `components/` and register it in `__init__.py`.
+#### Built-in components
+
+| Component | Purpose | Config keys |
+|-----------|---------|-------------|
+| `CurrentFileName` | Shows the active document name | `poll_ms` (int, default 500) |
+| `OriginalMenuBar` | Migrated native QMenuBar | (none) |
+| `Separator` | Fixed-width visual divider | `width` (int, px, default 8) |
+| `Spacer` | Expands to fill remaining space | `scale` (int, ≥1, default 1) — proportion relative to other spacers |
+| `CustomToolBar` | Hosts a named QToolBar below the titlebar | `toolbar_name` (str, default `"customToolBar2"`) |
+| `WindowControl` | Minimize / Maximize / Close buttons | `button_width` (int, px, default 60), `close_hover_bg` (CSS color, default `"#E81123"`) |
 
 ## Technical overview
 
@@ -99,12 +112,14 @@ frameless/
 ├── frameless/
 │   ├── __init__.py                       # Python package entry
 │   ├── FramelessExtension.py             # main logic (Win32/DWM + titlebar + entry point)
-│   ├── config.json                       # layout configuration
+│   ├── config.json                       # layout config (auto-generated on first run)
 │   ├── components/
 │   │   ├── __init__.py                   # component registry + config loader
 │   │   ├── filename.py                   # CurrentFileName
 │   │   ├── menubar.py                    # OriginalMenuBar
-│   │   ├── spacer.py                     # Spacer
+│   │   ├── separator.py                  # Separator (fixed-width divider)
+│   │   ├── spacer.py                     # Spacer (proportional expansion)
+│   │   ├── toolbar.py                    # CustomToolBar
 │   │   └── window_control.py             # WindowControl
 │   ├── krita.pyi                         # Krita Python API type stubs
 │   └── Manual.html                       # Krita plugin help page

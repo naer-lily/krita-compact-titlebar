@@ -56,8 +56,6 @@ MONITOR_DEFAULTTONEAREST = 2
 DRAG_THRESHOLD_PX      = 5
 DWM_TOP_MARGIN         = 1
 CORNER_POLL_MS         = 100
-TITLEBAR_PAD_LEFT      = 4
-
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  FRAMELESS WINDOW                                                           ║
@@ -237,7 +235,7 @@ class _TitleBar(QWidget):
 
         # ---- Build sections from config.json ----------------------------
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(TITLEBAR_PAD_LEFT, 0, 0, 0)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
         for item in layout_config:

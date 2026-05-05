@@ -6,7 +6,7 @@ Vibe-coded with deepseek-v4-pro.
 
 **不止是无边框——标题栏结构完全可自定义。** 去掉 Windows 原生标题栏后，你可以自由组合任意组件来构建自己的紧凑标题栏：文档名、菜单、弹性空白、画笔大小滑块、窗口控制按钮，也可以自己写组件。标题栏空白区域可拖动窗口，双击切换最大化。
 
-布局通过 `config.json` 驱动，组件模块化——在 `components/` 下放一个新的 `.py` 文件并注册即可添加自定义组件。
+布局通过 `config.json` 驱动。首次运行时（或文件缺失/损坏时）会自动写盘一份模板 `config.json`，编辑后重启 Krita 即可。组件模块化——在 `components/` 下放一个新的 `.py` 文件并注册即可添加自定义组件。
 
 **仅支持 Windows 10 / 11。** 其他操作系统不受影响（插件在加载时会静默跳过非 Windows 消息）。
 
@@ -46,20 +46,33 @@ Frameless：
 
 ### 配置
 
-编辑 `frameless/config.json` 自定义标题栏布局：
+编辑 `frameless/config.json` 自定义标题栏布局。
+文件被删除或损坏后，下次启动会自动写回模板。
 
 ```json
 {
     "layout": [
         {"name": "CurrentFileName", "config": {"poll_ms": 500}},
         {"name": "OriginalMenuBar", "config": {}},
-        {"name": "Spacer",           "config": {}},
-        {"name": "WindowControl",   "config": {"button_width": 60}}
+        {"name": "Separator",       "config": {"width": 8}},
+        {"name": "Spacer",          "config": {"scale": 1}},
+        {"name": "CustomToolBar",   "config": {}},
+        {"name": "Separator",       "config": {"width": 8}},
+        {"name": "WindowControl",   "config": {"button_width": 60, "close_hover_bg": "#E81123"}}
     ]
 }
 ```
 
-组件位于 `frameless/components/`——每个组件暴露 `create(window, bar_h, config)` 工厂函数。添加自定义组件只需在该目录下放置 `.py` 文件并在 `__init__.py` 注册即可。
+#### 内置组件
+
+| 组件 | 用途 | 配置项 |
+|------|------|--------|
+| `CurrentFileName` | 显示当前文档名 | `poll_ms`（int，默认 500） |
+| `OriginalMenuBar` | 迁移的原生 QMenuBar | （无） |
+| `Separator` | 固定宽度视觉分割 | `width`（int，像素，默认 8） |
+| `Spacer` | 弹性空白，填满剩余空间 | `scale`（int，≥1，默认 1）——相对其他 Spacer 的比例 |
+| `CustomToolBar` | 托管一个具名 QToolBar | `toolbar_name`（str，默认 `"customToolBar2"`） |
+| `WindowControl` | 最小化/最大化/关闭按钮 | `button_width`（int，像素，默认 60），`close_hover_bg`（CSS 颜色，默认 `"#E81123"`） |
 
 ---
 
@@ -105,12 +118,14 @@ frameless/
 ├── frameless/
 │   ├── __init__.py                       # Python 包入口
 │   ├── FramelessExtension.py             # 主逻辑（Win32/DWM + 标题栏 + 入口）
-│   ├── config.json                       # 布局配置
+│   ├── config.json                       # 布局配置（首次运行时自动生成）
 │   ├── components/
 │   │   ├── __init__.py                   # 组件注册表 + 配置加载器
 │   │   ├── filename.py                   # CurrentFileName
 │   │   ├── menubar.py                    # OriginalMenuBar
-│   │   ├── spacer.py                     # Spacer
+│   │   ├── separator.py                  # Separator（固定宽度分割）
+│   │   ├── spacer.py                     # Spacer（比例弹性空白）
+│   │   ├── toolbar.py                    # CustomToolBar
 │   │   └── window_control.py             # WindowControl
 │   ├── krita.pyi                         # Krita Python API 类型桩
 │   └── Manual.html                       # Krita 插件帮助页
