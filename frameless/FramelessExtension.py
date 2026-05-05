@@ -230,7 +230,8 @@ class _TitleBar(QWidget):
         self._ctx = _ComponentContext(self)
 
         self.setObjectName("frameless-titlebar")
-        self.setFixedHeight(bar_h)
+        self.setMinimumHeight(bar_h)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         self.setStyleSheet(_TITLEBAR_STYLESHEET)
 
         # ---- Build sections from config.json ----------------------------
@@ -407,6 +408,7 @@ class FramelessExtension(Extension):
             # ---- Set as TopLeftCorner + full-width Resize filter --------
             original_menubar.setCornerWidget(titlebar, Qt.TopLeftCorner)
             titlebar.show()
+            original_menubar.updateGeometry()
             resize_filter = _CornerResizeFilter(original_menubar, titlebar)
             original_menubar.installEventFilter(resize_filter)
 

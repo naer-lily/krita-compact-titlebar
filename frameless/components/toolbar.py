@@ -39,7 +39,7 @@ class _ToolBarSection(QWidget):
             self.layout().removeWidget(self._toolbar)
             if self._original_parent is not None:
                 self._toolbar.setParent(self._original_parent)
-        except: pass
+        except: pass 
         self._toolbar = None
 
 
